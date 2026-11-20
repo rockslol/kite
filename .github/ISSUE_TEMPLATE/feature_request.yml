@@ -1,0 +1,21 @@
+name: Feature idea
+description: Something Kite could do.
+labels: [idea]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Kite to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What are you trying to do that's hard or impossible now?
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Kite stays small, plays only free sources (YouTube Music, YouTube, SoundCloud, local files) and only imports from paid ones. Ideas that keep to that have the best chance. See [CONTRIBUTING.md](https://github.com/rockslol/kite/blob/main/CONTRIBUTING.md).

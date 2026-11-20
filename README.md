@@ -142,7 +142,7 @@ macOS builds are made with the GitHub Actions workflow in `.github/workflows/bui
 
 ## Contributing
 
-Contributions are welcome: bug reports, ideas, and pull requests. For bigger changes, open an issue first so we can talk it through.
+Contributions are welcome: bug reports, ideas, and pull requests. For bigger changes, open an issue first so we can talk it through. See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and what to check before opening a pull request, and [CHANGELOG.md](./CHANGELOG.md) for what changed in each version.
 
 ---
 

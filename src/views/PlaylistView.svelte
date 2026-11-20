@@ -95,23 +95,10 @@
     invoke("lib_playlist_move", { id, itemId: item.item_id, to });
   }
 
-  function remove(t) {
-    items = items.filter((x) => x.item_id !== t.item_id);
-    invoke("lib_playlist_remove", { id, itemId: t.item_id });
-  }
-
-  function deleteMenu(e) {
-    menu.open(e, [
-      {
-        label: `Delete "${info?.name}"`,
-        danger: true,
-        action: async () => {
-          await library.deletePlaylist(id);
-          nav.go({ name: "liked" });
-        },
-      },
-      { label: "Cancel", action: () => {} },
-    ]);
+  function remove(chosen) {
+    const ids = new Set(chosen.map((t) => t.item_id));
+    items = items.filter((x) => !ids.has(x.item_id));
+    library.removeFromPlaylist(id, chosen);
   }
 </script>
 
@@ -156,7 +143,7 @@
           {syncing ? "Syncing…" : "Sync"}
         </button>
       {/if}
-      <button class="btn text" onclick={deleteMenu}>Delete</button>
+      <button class="btn text" onclick={() => library.deletePlaylist(id)}>Delete</button>
     </div>
   </header>
 
@@ -183,10 +170,13 @@
     <TrackList
       tracks={items}
       onmove={move}
-      extraMenu={(t) => [
-        { label: "Wrong song? Pick another version", keepOpen: true, action: () => pickAnother(t) },
-        { label: "Remove from this playlist", action: () => remove(t) },
-      ]}
+      extraMenu={(chosen) =>
+        chosen.length === 1
+          ? [
+              { label: "Wrong song? Pick another version", keepOpen: true, action: () => pickAnother(chosen[0]) },
+              { label: "Remove from this playlist", action: () => remove(chosen) },
+            ]
+          : [{ label: `Remove ${chosen.length} from this playlist`, action: () => remove(chosen) }]}
     />
   {:else if loaded}
     <p class="empty">This playlist is empty. Right-click any song and pick "Add to playlist", or drag songs onto it in the sidebar.</p>

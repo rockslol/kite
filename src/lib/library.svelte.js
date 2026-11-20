@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SvelteSet } from "svelte/reactivity";
-import { toasts } from "./ui.svelte.js";
+import { nav, toasts } from "./ui.svelte.js";
 
 const FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
 
@@ -71,6 +71,13 @@ class Library {
     }
   }
 
+  /** Like (or unlike) several songs at once. */
+  async setLiked(tracks, liked) {
+    const todo = tracks.filter((t) => this.liked.has(t.url) !== liked);
+    for (const t of todo) await this.toggleLike(t);
+    if (todo.length > 1) toasts.show(liked ? `Added ${todo.length} to liked songs` : `Removed ${todo.length} from liked songs`);
+  }
+
   async createPlaylist(name = "New playlist", tracks = []) {
     const id = await invoke("lib_playlist_create", { name });
     if (tracks.length) await invoke("lib_playlist_add", { id, tracks: tracks.map(plain) });
@@ -93,8 +100,35 @@ class Library {
     return invoke("lib_playlist_rename", { id, name }).catch((e) => toasts.show(String(e)));
   }
 
-  deletePlaylist(id) {
-    return invoke("lib_playlist_delete", { id });
+  /** Deletes a playlist, with an Undo toast that brings it back (and opens it again if it was open). */
+  async deletePlaylist(id) {
+    const wasOpen = nav.is("playlist", id);
+    let gone;
+    try {
+      gone = await invoke("lib_playlist_delete", { id });
+    } catch (e) {
+      return toasts.show(String(e));
+    }
+    if (wasOpen) nav.go({ name: "liked" });
+    toasts.undo(`Deleted ${gone.name}`, async () => {
+      const back = await invoke("lib_playlist_restore", { playlist: gone }).catch((e) => toasts.show(String(e)));
+      if (wasOpen && typeof back === "number") nav.go({ name: "playlist", id: back });
+    });
+  }
+
+  /** Removes items (by `item_id`) from a playlist, with an Undo toast. */
+  async removeFromPlaylist(id, items) {
+    let removed;
+    try {
+      removed = await invoke("lib_playlist_remove", { id, itemIds: items.map((t) => t.item_id) });
+    } catch (e) {
+      return toasts.show(String(e));
+    }
+    const name = this.playlists.find((p) => p.id === id)?.name ?? "the playlist";
+    const what = items.length === 1 ? items[0].title : `${items.length} songs`;
+    toasts.undo(`Removed ${what} from ${name}`, () =>
+      invoke("lib_playlist_unremove", { id, items: removed }).catch((e) => toasts.show(String(e)))
+    );
   }
 
   async addFolder() {

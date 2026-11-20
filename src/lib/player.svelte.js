@@ -84,18 +84,22 @@ class Player {
     this.#playAt(items.indexOf(chosen));
   }
 
-  playNext(track) {
-    if (this.index < 0) return this.playList([track], 0);
-    const item = toItem(track);
-    this.queue.splice(this.index + 1, 0, item);
-    this.#original?.push(item.key);
+  /** Put a song (or several, in order) right after the current one. */
+  playNext(tracks) {
+    tracks = [tracks].flat();
+    if (this.index < 0) return this.playList(tracks, 0);
+    const items = tracks.map(toItem);
+    this.queue.splice(this.index + 1, 0, ...items);
+    this.#original?.push(...items.map((t) => t.key));
   }
 
-  addToQueue(track) {
-    if (this.index < 0) return this.playList([track], 0);
-    const item = toItem(track);
-    this.queue.push(item);
-    this.#original?.push(item.key);
+  /** Add a song (or several) to the end of the queue. */
+  addToQueue(tracks) {
+    tracks = [tracks].flat();
+    if (this.index < 0) return this.playList(tracks, 0);
+    const items = tracks.map(toItem);
+    this.queue.push(...items);
+    this.#original?.push(...items.map((t) => t.key));
   }
 
   /** Play `tracks` in random order. */
@@ -139,9 +143,23 @@ class Player {
   }
 
   clearUpcoming() {
+    const cleared = this.queue.slice(this.index + 1);
+    if (!cleared.length) return;
+    const original = this.#original;
     const keep = new Set(this.queue.slice(0, this.index + 1).map((t) => t.key));
     this.queue = this.queue.slice(0, this.index + 1);
-    if (this.#original) this.#original = this.#original.filter((k) => keep.has(k));
+    if (original) this.#original = original.filter((k) => keep.has(k));
+    const text = cleared.length === 1 ? "Cleared 1 song from the queue" : `Cleared ${cleared.length} songs from the queue`;
+    toasts.undo(text, () => {
+      // Put them back after whatever is playing now, skipping any that are already back.
+      const have = new Set(this.queue.map((t) => t.key));
+      this.queue.splice(this.index + 1, 0, ...cleared.filter((t) => !have.has(t.key)));
+      if (original) {
+        const now = new Set(this.queue.map((t) => t.key));
+        const known = new Set(original);
+        this.#original = [...original.filter((k) => now.has(k)), ...[...now].filter((k) => !known.has(k))];
+      }
+    });
   }
 
   toggleShuffle() {

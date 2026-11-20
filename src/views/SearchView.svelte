@@ -14,6 +14,18 @@
   {#if search.error}
     <p class="empty error">{search.error}</p>
   {:else if search.results.length}
+    <div class="bar">
+      <button class="btn primary" onclick={() => player.playList(search.results, 0)}>Play all</button>
+      <button class="btn" onclick={() => player.playShuffled(search.results)}>Shuffle</button>
+    </div>
+
+<style>
+  .bar {
+    display: flex;
+    gap: 8px;
+    margin: 4px 8px 10px;
+  }
+</style>
     <TrackList tracks={search.results} onhover={(t) => player.warm(t)} />
   {:else if search.searchedFor && !search.searching}
     <p class="empty">Nothing found for "{search.searchedFor}".</p>

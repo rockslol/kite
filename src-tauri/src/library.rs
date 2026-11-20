@@ -7,7 +7,7 @@ use crate::stream::{mime_for, serve_path, text};
 use crate::ytdlp::Track;
 use percent_encoding::percent_decode_str;
 use rusqlite::{params, Connection, OptionalExtension, Row};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -119,6 +119,56 @@ pub fn upsert(conn: &Connection, t: &Track) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// A playlist row as it was before a delete, for undo.
+#[derive(Serialize, Deserialize)]
+pub struct DeletedPlaylist {
+    id: i64,
+    name: String,
+    source_url: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    items: Vec<SavedItem>,
+}
+
+/// A playlist item as it was before it was removed, for undo.
+#[derive(Serialize, Deserialize)]
+pub struct SavedItem {
+    url: String,
+    position: i64,
+    added_at: i64,
+    origin: Option<String>,
+}
+
+fn saved_items(c: &Connection, playlist_id: i64, only: Option<&[i64]>) -> rusqlite::Result<Vec<SavedItem>> {
+    let mut st = c.prepare(
+        "SELECT id, url, position, added_at, origin FROM playlist_items WHERE playlist_id = ?1 ORDER BY position, id",
+    )?;
+    let rows = st.query_map([playlist_id], |r| {
+        Ok((r.get::<_, i64>(0)?, SavedItem { url: r.get(1)?, position: r.get(2)?, added_at: r.get(3)?, origin: r.get(4)? }))
+    })?;
+    let mut out = vec![];
+    for row in rows {
+        let (id, item) = row?;
+        if only.is_none_or(|ids| ids.contains(&id)) {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
+/// Puts saved items back. Songs whose track was removed from the library meanwhile
+/// (a local folder that was taken out) are skipped.
+fn insert_saved(c: &Connection, playlist_id: i64, items: &[SavedItem]) -> rusqlite::Result<()> {
+    for it in items {
+        c.execute(
+            "INSERT INTO playlist_items (playlist_id, url, position, added_at, origin)
+             SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM tracks WHERE url = ?2)",
+            params![playlist_id, it.url, it.position, it.added_at, it.origin],
+        )?;
+    }
+    Ok(())
+}
+
 pub struct Library {
     conn: Mutex<Connection>,
     pub db_path: PathBuf,
@@ -190,6 +240,60 @@ impl Library {
         })
     }
 
+    pub fn delete_playlist(&self, id: i64) -> Result<DeletedPlaylist, String> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            let (name, source_url, created_at, updated_at) = tx.query_row(
+                "SELECT name, source_url, created_at, updated_at FROM playlists WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            let items = saved_items(&tx, id, None)?;
+            tx.execute("DELETE FROM playlists WHERE id = ?1", [id])?;
+            tx.commit()?;
+            Ok(DeletedPlaylist { id, name, source_url, created_at, updated_at, items })
+        })
+    }
+
+    pub fn restore_playlist(&self, p: &DeletedPlaylist) -> Result<i64, String> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            // Keep the old id unless a playlist made since has taken it.
+            let free: bool = tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM playlists WHERE id = ?1)", [p.id], |r| r.get(0))?;
+            tx.execute(
+                "INSERT INTO playlists (id, name, source_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![free.then_some(p.id), p.name, p.source_url, p.created_at, p.updated_at],
+            )?;
+            let id = tx.last_insert_rowid();
+            insert_saved(&tx, id, &p.items)?;
+            tx.commit()?;
+            Ok(id)
+        })
+    }
+
+    pub fn remove_items(&self, playlist_id: i64, item_ids: &[i64]) -> Result<Vec<SavedItem>, String> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            let removed = saved_items(&tx, playlist_id, Some(item_ids))?;
+            for id in item_ids {
+                tx.execute("DELETE FROM playlist_items WHERE id = ?1 AND playlist_id = ?2", params![id, playlist_id])?;
+            }
+            tx.execute("UPDATE playlists SET updated_at = ?1 WHERE id = ?2", params![now(), playlist_id])?;
+            tx.commit()?;
+            Ok(removed)
+        })
+    }
+
+    /// Removing leaves gaps in `position`, so putting items back at their old position puts
+    /// them back in order (unless the playlist was reordered in between, which renumbers it).
+    pub fn restore_items(&self, playlist_id: i64, items: &[SavedItem]) -> Result<(), String> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            insert_saved(&tx, playlist_id, items)?;
+            tx.commit()
+        })
+    }
+
     pub fn playlist_source(&self, id: i64) -> Result<Option<String>, String> {
         self.with(|c| {
             c.query_row("SELECT source_url FROM playlists WHERE id = ?1", [id], |r| r.get(0))
@@ -252,7 +356,7 @@ impl Library {
         });
     }
 
-    fn with<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
         let mut conn = self.conn.lock().map_err(err)?;
         f(&mut conn).map_err(err)
     }
@@ -473,11 +577,20 @@ pub fn lib_playlist_rename(app: AppHandle, lib: Lib<'_>, id: i64, name: String) 
     Ok(())
 }
 
+/// Deletes a playlist and returns what it held, so the delete can be undone.
 #[tauri::command]
-pub fn lib_playlist_delete(app: AppHandle, lib: Lib<'_>, id: i64) -> Result<(), String> {
-    lib.with(|c| c.execute("DELETE FROM playlists WHERE id = ?1", [id]))?;
+pub fn lib_playlist_delete(app: AppHandle, lib: Lib<'_>, id: i64) -> Result<DeletedPlaylist, String> {
+    let gone = lib.delete_playlist(id)?;
     changed(&app, "playlists");
-    Ok(())
+    Ok(gone)
+}
+
+/// Undo for `lib_playlist_delete`. Returns the playlist's id (a new one if the old id was reused).
+#[tauri::command]
+pub fn lib_playlist_restore(app: AppHandle, lib: Lib<'_>, playlist: DeletedPlaylist) -> Result<i64, String> {
+    let id = lib.restore_playlist(&playlist)?;
+    changed(&app, "playlists");
+    Ok(id)
 }
 
 #[tauri::command]
@@ -485,7 +598,7 @@ pub fn lib_playlist_items(lib: Lib<'_>, id: i64) -> Result<Vec<PlaylistItem>, St
     lib.with(|c| {
         let mut st = c.prepare(&format!(
             "SELECT {COLS}, i.id FROM playlist_items i JOIN tracks t ON t.url = i.url
-             WHERE i.playlist_id = ?1 ORDER BY i.position"
+             WHERE i.playlist_id = ?1 ORDER BY i.position, i.id"
         ))?;
         let rows = st.query_map([id], |r| Ok(PlaylistItem { track: row_track(r)?, item_id: r.get(9)? }))?;
         rows.collect()
@@ -501,9 +614,18 @@ pub fn lib_playlist_add(app: AppHandle, lib: Lib<'_>, id: i64, tracks: Vec<Track
     Ok(added)
 }
 
+/// Removes items from a playlist and returns them, so the removal can be undone.
 #[tauri::command]
-pub fn lib_playlist_remove(app: AppHandle, lib: Lib<'_>, id: i64, item_id: i64) -> Result<(), String> {
-    lib.with(|c| c.execute("DELETE FROM playlist_items WHERE id = ?1 AND playlist_id = ?2", params![item_id, id]))?;
+pub fn lib_playlist_remove(app: AppHandle, lib: Lib<'_>, id: i64, item_ids: Vec<i64>) -> Result<Vec<SavedItem>, String> {
+    let removed = lib.remove_items(id, &item_ids)?;
+    changed(&app, "playlists");
+    Ok(removed)
+}
+
+/// Undo for `lib_playlist_remove`: puts the items back where they were.
+#[tauri::command]
+pub fn lib_playlist_unremove(app: AppHandle, lib: Lib<'_>, id: i64, items: Vec<SavedItem>) -> Result<(), String> {
+    lib.restore_items(id, &items)?;
     changed(&app, "playlists");
     Ok(())
 }
@@ -514,7 +636,7 @@ pub fn lib_playlist_move(app: AppHandle, lib: Lib<'_>, id: i64, item_id: i64, to
     lib.with(|c| {
         let tx = c.transaction()?;
         let mut ids: Vec<i64> = {
-            let mut st = tx.prepare("SELECT id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position")?;
+            let mut st = tx.prepare("SELECT id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position, id")?;
             let rows = st.query_map([id], |r| r.get(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
@@ -652,6 +774,87 @@ pub fn lib_scanning(lib: Lib<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::image_url_allowed as ok;
+    use super::*;
+
+    fn track(n: u32) -> Track {
+        Track {
+            id: n.to_string(),
+            source: "youtube".into(),
+            url: format!("https://www.youtube.com/watch?v={n}"),
+            title: format!("Song {n}"),
+            artist: "Artist".into(),
+            album: None,
+            duration: Some(180.0),
+            artwork: None,
+            preview: false,
+        }
+    }
+
+    fn urls(lib: &Library, id: i64) -> Vec<String> {
+        lib.tracks(
+            &format!("SELECT {COLS} FROM playlist_items i JOIN tracks t ON t.url = i.url WHERE i.playlist_id = ?1 ORDER BY i.position, i.id"),
+            [id],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|t| t.url)
+        .collect()
+    }
+
+    fn temp_library() -> (Library, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kite-test-{}-{}", std::process::id(), now_nanos()));
+        (Library::open(&dir).unwrap(), dir)
+    }
+
+    fn now_nanos() -> u128 {
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    }
+
+    #[test]
+    fn removed_items_come_back_in_place() {
+        let (lib, dir) = temp_library();
+        let id = lib.create_playlist("Mix", None).unwrap();
+        let items: Vec<_> = (1..=5).map(|n| (track(n), None)).collect();
+        lib.add_items(id, &items).unwrap();
+        let before = urls(&lib, id);
+        let ids: Vec<i64> = lib.with(|c| {
+            let mut st = c.prepare("SELECT id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position")?;
+            let rows = st.query_map([id], |r| r.get(0))?;
+            rows.collect()
+        })
+        .unwrap();
+        let removed = lib.remove_items(id, &[ids[1], ids[3]]).unwrap();
+        assert_eq!(removed.len(), 2);
+        assert_eq!(urls(&lib, id).len(), 3);
+        lib.restore_items(id, &removed).unwrap();
+        assert_eq!(urls(&lib, id), before);
+        drop(lib);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deleted_playlist_comes_back() {
+        let (lib, dir) = temp_library();
+        let id = lib.create_playlist("Gone", Some("https://www.deezer.com/playlist/1")).unwrap();
+        let items: Vec<_> = (1..=3).map(|n| (track(n), Some(format!("origin {n}")))).collect();
+        lib.add_items(id, &items).unwrap();
+        let before = urls(&lib, id);
+        let gone = lib.delete_playlist(id).unwrap();
+        assert!(urls(&lib, id).is_empty());
+        assert_eq!(lib.restore_playlist(&gone).unwrap(), id);
+        assert_eq!(urls(&lib, id), before);
+        assert_eq!(lib.playlist_source(id).unwrap().as_deref(), Some("https://www.deezer.com/playlist/1"));
+
+        // A playlist made after the delete takes the old id: the restored one gets a new id.
+        let gone = lib.delete_playlist(id).unwrap();
+        let other = lib.create_playlist("New", None).unwrap();
+        assert_eq!(other, id);
+        let back = lib.restore_playlist(&gone).unwrap();
+        assert_ne!(back, id);
+        assert_eq!(urls(&lib, back), before);
+        drop(lib);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn cover_proxy_only_allows_known_image_hosts() {

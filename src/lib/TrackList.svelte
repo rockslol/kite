@@ -1,15 +1,18 @@
 <script>
   // A list of songs: click plays the list from that song, right-click opens the song menu,
-  // the heart likes it. Songs can be dragged onto a playlist in the sidebar, and reordered
-  // when `onmove` is given.
+  // the heart likes it. Ctrl+click and Shift+click select several songs (Ctrl+A all, Esc
+  // clears); the menu and dragging then act on all of them. Songs can be dragged onto a
+  // playlist in the sidebar, and reordered when `onmove` is given.
+  import { untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { player } from "./player.svelte.js";
   import { library } from "./library.svelte.js";
-  import { songMenu } from "./menus.js";
+  import { songMenu, songsMenu } from "./menus.js";
   import { artSrc, fmtTime } from "./urls.js";
 
   let {
     tracks,
-    extraMenu = null, // (track, index) => extra menu items
+    extraMenu = null, // (tracks) => extra menu items, for one song or a selection
     onmove = null, // (index, toIndex) => void
     onhover = null, // (track) => void
     detail = null, // (track) => text shown instead of the duration
@@ -17,13 +20,66 @@
 
   let dragFrom = $state(-1);
   let dropAt = $state(-1);
+  let listEl = $state();
+
+  // ---- selection (by index, so it's dropped whenever the list changes)
+  const selected = new SvelteSet();
+  let anchor = -1;
+  $effect(() => {
+    tracks;
+    untrack(() => {
+      selected.clear();
+      anchor = -1;
+    });
+  });
+  const chosen = () => tracks.filter((_, i) => selected.has(i));
+
+  function click(e, i) {
+    if (e.ctrlKey || e.metaKey) {
+      selected.has(i) ? selected.delete(i) : selected.add(i);
+      anchor = i;
+    } else if (e.shiftKey) {
+      const from = anchor >= 0 ? anchor : i;
+      selected.clear();
+      for (let k = Math.min(from, i); k <= Math.max(from, i); k++) selected.add(k);
+    } else {
+      selected.clear();
+      anchor = i;
+      player.playList(tracks, i);
+    }
+  }
+
+  function key(e, i) {
+    if (e.key === "Enter") player.playList(tracks, i);
+    else if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      tracks.forEach((_, k) => selected.add(k));
+    }
+  }
+
+  function contextMenu(e, i) {
+    if (selected.has(i) && selected.size > 1) {
+      const list = chosen();
+      return songsMenu(e, list, extraMenu?.(list) ?? []);
+    }
+    selected.clear();
+    anchor = i;
+    songMenu(e, tracks, i, extraMenu?.([tracks[i]]) ?? []);
+  }
+
+  function outside(e) {
+    if (selected.size && !listEl?.contains(e.target) && !e.target.closest?.(".menu, .toasts")) selected.clear();
+  }
 
   function dragStart(e, i) {
     const t = tracks[i];
-    e.dataTransfer.effectAllowed = onmove ? "copyMove" : "copy";
-    e.dataTransfer.setData("application/x-kite-tracks", JSON.stringify([t]));
-    e.dataTransfer.setData("text/plain", `${t.artist} - ${t.title}`);
-    dragFrom = i;
+    const many = selected.has(i) && selected.size > 1;
+    const list = many ? chosen() : [t];
+    e.dataTransfer.effectAllowed = onmove && !many ? "copyMove" : "copy";
+    e.dataTransfer.setData("application/x-kite-tracks", JSON.stringify(list));
+    e.dataTransfer.setData("text/plain", list.map((x) => `${x.artist} - ${x.title}`).join("\n"));
+    // A selection is only dragged onto playlists; reordering moves one song at a time.
+    dragFrom = many ? -1 : i;
   }
   function dragOver(e, i) {
     if (!onmove || dragFrom < 0) return;
@@ -51,7 +107,12 @@
   }
 </script>
 
-<ul class="list" ondrop={drop}>
+<svelte:window
+  onpointerdown={outside}
+  onkeydown={(e) => e.key === "Escape" && selected.size && selected.clear()}
+/>
+
+<ul class="list" ondrop={drop} bind:this={listEl}>
   {#each tracks as t, i (t.item_id ?? t.url + i)}
     {@const isCurrent = player.current?.url === t.url}
     {@const liked = library.liked.has(t.url)}
@@ -67,11 +128,13 @@
       <div
         class="row"
         class:current={isCurrent}
+        class:selected={selected.has(i)}
         role="button"
         tabindex="0"
-        onclick={() => player.playList(tracks, i)}
-        onkeydown={(e) => e.key === "Enter" && player.playList(tracks, i)}
-        oncontextmenu={(e) => songMenu(e, tracks, i, extraMenu?.(t, i) ?? [])}
+        aria-pressed={selected.has(i)}
+        onclick={(e) => click(e, i)}
+        onkeydown={(e) => key(e, i)}
+        oncontextmenu={(e) => contextMenu(e, i)}
         onpointerenter={() => enter(t)}
         onpointerleave={() => clearTimeout(hoverTimer)}
       >
@@ -139,6 +202,11 @@
   }
   .row.current {
     background: var(--accent-softer);
+  }
+  .row.selected,
+  .row.selected:hover {
+    background: var(--active);
+    box-shadow: inset 0 0 0 1px var(--border);
   }
   .num {
     text-align: center;

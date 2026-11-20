@@ -21,6 +21,19 @@ export function songMenu(e, list, index, extra = []) {
   ]);
 }
 
+/** The menu for several selected songs. */
+export function songsMenu(e, tracks, extra = []) {
+  const allLiked = tracks.every((t) => library.isLiked(t));
+  menu.open(e, [
+    { label: `Play ${tracks.length} songs`, action: () => player.playList(tracks, 0) },
+    { label: "Play next", action: () => player.playNext(tracks) },
+    { label: "Add to queue", action: () => player.addToQueue(tracks) },
+    { label: allLiked ? "Remove from liked songs" : "Add to liked songs", action: () => library.setLiked(tracks, !allLiked) },
+    { label: "Add to playlist…", keepOpen: true, action: () => playlistPicker(tracks) },
+    ...extra,
+  ]);
+}
+
 /** Replaces the open menu with a list of playlists to add `tracks` to. */
 export function playlistPicker(tracks) {
   menu.swap([

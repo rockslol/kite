@@ -158,7 +158,12 @@
 
 <div class="toasts" aria-live="polite">
   {#each toasts.list as t (t.id)}
-    <div class="toast">{t.text}</div>
+    <div class="toast">
+      {t.text}
+      {#if t.action}
+        <button onclick={() => (toasts.dismiss(t.id), t.action.run())}>{t.action.label}</button>
+      {/if}
+    </div>
   {/each}
 </div>
 
@@ -293,5 +298,20 @@
     font-weight: 500;
     font-size: 13px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+  .toast button {
+    pointer-events: auto;
+    margin: -4px -6px -4px 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .toast button:hover {
+    background: rgba(0, 0, 0, 0.08);
   }
 </style>

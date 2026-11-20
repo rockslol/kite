@@ -21,23 +21,7 @@
   function playlistMenu(e, p) {
     menu.open(e, [
       { label: "Rename", action: () => nav.go({ name: "playlist", id: p.id, rename: true }) },
-      {
-        label: "Delete playlist",
-        danger: true,
-        keepOpen: true,
-        action: () =>
-          menu.swap([
-            {
-              label: `Delete "${p.name}"`,
-              danger: true,
-              action: async () => {
-                await library.deletePlaylist(p.id);
-                if (nav.is("playlist", p.id)) nav.go({ name: "liked" });
-              },
-            },
-            { label: "Cancel", action: () => {} },
-          ]),
-      },
+      { label: "Delete playlist", danger: true, action: () => library.deletePlaylist(p.id) },
     ]);
   }
 

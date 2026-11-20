@@ -37,10 +37,20 @@ class Toasts {
   list = $state([]);
   #id = 0;
 
-  show(text) {
+  /** `action` ({ label, run }) adds a button, e.g. Undo; those toasts stay a little longer. */
+  show(text, action = null) {
     const id = ++this.#id;
-    this.list = [...this.list, { id, text }];
-    setTimeout(() => (this.list = this.list.filter((t) => t.id !== id)), 2600);
+    this.list = [...this.list, { id, text, action }];
+    setTimeout(() => this.dismiss(id), action ? 6000 : 2600);
+  }
+
+  dismiss(id) {
+    this.list = this.list.filter((t) => t.id !== id);
+  }
+
+  /** A toast with an Undo button. */
+  undo(text, run) {
+    this.show(text, { label: "Undo", run });
   }
 }
 

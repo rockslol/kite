@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in Kite doesn't work the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Searched for "…" on YouTube Music
+        2. Clicked the first song
+        3. It showed "Couldn't play this song" and skipped
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Kite version
+      description: Shown in Settings.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Song or playlist link
+      description: If it's about a particular song, playlist or import, paste its link.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, error messages, or whether it happens every time.

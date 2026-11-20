@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod backup;
 mod import;
 mod library;
 mod local;
@@ -158,9 +159,11 @@ fn main() {
             library::lib_playlist_create,
             library::lib_playlist_rename,
             library::lib_playlist_delete,
+            library::lib_playlist_restore,
             library::lib_playlist_items,
             library::lib_playlist_add,
             library::lib_playlist_remove,
+            library::lib_playlist_unremove,
             library::lib_playlist_move,
             library::lib_played,
             library::lib_history,
@@ -172,6 +175,8 @@ fn main() {
             library::lib_remove_folder,
             library::lib_rescan,
             library::lib_scanning,
+            backup::lib_export,
+            backup::lib_import,
             import::import_link,
             import::open_link,
             import::match_alternatives,

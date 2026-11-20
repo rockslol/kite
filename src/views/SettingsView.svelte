@@ -62,6 +62,45 @@
     ]);
   }
 
+  let moving = $state(false);
+  const FILTER = [{ name: "Kite library", extensions: ["json"] }];
+
+  async function exportLibrary() {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const day = new Date().toISOString().slice(0, 10);
+    const path = await save({ title: "Export your library", defaultPath: `Kite library ${day}.json`, filters: FILTER });
+    if (!path) return;
+    moving = true;
+    try {
+      const r = await invoke("lib_export", { path });
+      toasts.show(`Exported ${r.songs} songs and ${r.playlists} playlists`);
+    } catch (e) {
+      toasts.show(String(e));
+    }
+    moving = false;
+  }
+
+  async function importLibrary() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const path = await open({ title: "Import a library", filters: FILTER });
+    if (!path) return;
+    moving = true;
+    try {
+      const r = await invoke("lib_import", { path });
+      const parts = [
+        r.playlists && `${r.playlists} playlists`,
+        r.playlist_songs && `${r.playlist_songs} playlist songs`,
+        r.likes && `${r.likes} liked songs`,
+        r.plays && `${r.plays} plays`,
+        r.folders && `${r.folders} music folders`,
+      ].filter(Boolean);
+      toasts.show(parts.length ? `Imported ${parts.join(", ")}` : "Nothing new to import, your library already has all of it");
+    } catch (e) {
+      toasts.show(String(e));
+    }
+    moving = false;
+  }
+
   function size(b) {
     if (b === null) return "…";
     if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
@@ -109,6 +148,16 @@
       <div class="row">
         <div><p class="label">Listening history</p><p class="hint">Used for Recently played and Most played.</p></div>
         <button class="btn" onclick={clearHistory}>Clear</button>
+      </div>
+      <div class="row">
+        <div>
+          <p class="label">Back up or move your library</p>
+          <p class="hint">Liked songs, playlists, history and music folders in one file. Importing adds what's missing and keeps what you have.</p>
+        </div>
+        <div class="pair">
+          <button class="btn" onclick={importLibrary} disabled={moving}>Import…</button>
+          <button class="btn" onclick={exportLibrary} disabled={moving}>Export…</button>
+        </div>
       </div>
     </section>
 
@@ -209,6 +258,11 @@
     color: var(--muted);
     font-size: 13px;
     word-break: break-word;
+  }
+  .pair {
+    display: flex;
+    gap: 8px;
+    flex: none;
   }
   .btn {
     flex: none;
