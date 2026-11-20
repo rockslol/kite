@@ -4,8 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { streamUrl } from "./urls.js";
 
-const SAVE_KEY = "hum.session";
-const POS_KEY = "hum.position";
+const SAVE_KEY = "kite.session";
+const POS_KEY = "kite.position";
 const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
 
 let seq = 0;
@@ -45,9 +45,7 @@ class Player {
   #dragging = false;
   #resumeAt = 0;
   #original = null; // queue order before shuffling, as keys
-  #explaining = false;
   #counted = false;
-  #lap = null;
 
   constructor() {
     this.#audio.preload = "auto";
@@ -221,12 +219,8 @@ class Player {
     this.#counted = false;
     this.#sendTrack(track);
 
-    const tStart = performance.now();
-    const lap = (what) => console.log(`[hum] ${what} +${Math.round(performance.now() - tStart)} ms`);
-    this.#lap = lap;
     try {
       if (track.source !== "local") await invoke("prepare", { url: track.url });
-      lap("prepared");
     } catch (e) {
       if (token === this.#token) {
         this.loading = false;
@@ -239,7 +233,10 @@ class Player {
     audio.src = streamUrl(track);
     if (startAt > 0) audio.currentTime = startAt;
     audio.play().catch((e) => {
-      if (e.name !== "AbortError" && token === this.#token) this.#explain(track, e.message || String(e));
+      if (e.name !== "AbortError" && token === this.#token) {
+        this.loading = false;
+        this.error = "This song couldn't be played.";
+      }
     });
 
     this.warm(this.queue[i + 1]);
@@ -259,8 +256,6 @@ class Player {
   #wireAudio() {
     const a = this.#audio;
     a.addEventListener("playing", () => {
-      this.#lap?.("playing");
-      this.#lap = null;
       this.playing = true;
       this.loading = false;
       this.#media("playing");
@@ -300,7 +295,7 @@ class Player {
       if (!a.getAttribute("src") || !this.current) return;
       this.loading = false;
       this.playing = false;
-      this.#explain(this.current, a.error?.message || `media error ${a.error?.code}`);
+      this.error = "This song couldn't be played.";
     });
   }
 
@@ -333,6 +328,7 @@ class Player {
   }
 
   #sendTrack(t, duration = t.duration) {
+    invoke("tray_tooltip", { text: t.artist ? `${t.title} · ${t.artist}` : t.title }).catch(() => {});
     invoke("media_track", {
       title: t.title,
       artist: t.artist || "",
@@ -380,25 +376,6 @@ class Player {
     } catch {
       localStorage.removeItem(SAVE_KEY);
     }
-  }
-
-  // Temporary while playback is being brought up: show where the stream breaks.
-  async #explain(track, mediaMsg) {
-    if (this.#explaining) return;
-    this.#explaining = true;
-    this.error = mediaMsg;
-    let webview;
-    try {
-      const r = await fetch(streamUrl(track), { headers: { Range: "bytes=0-1023" } });
-      const body = r.ok ? `${(await r.arrayBuffer()).byteLength} bytes` : await r.text();
-      webview = `webview got ${r.status} ${r.headers.get("content-type") || ""}, ${body}`;
-    } catch (e) {
-      webview = `webview fetch failed: ${e.message || e}`;
-    }
-    const backend = await invoke("diagnose", { url: track.url }).catch((e) => `diagnose failed: ${e}`);
-    console.error("[hum] playback failed", { mediaMsg, webview, backend });
-    if (track === this.current) this.error = `${mediaMsg} · ${webview} · ${backend}`;
-    this.#explaining = false;
   }
 }
 

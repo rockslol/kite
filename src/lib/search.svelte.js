@@ -5,7 +5,7 @@ import { player } from "./player.svelte.js";
 import { importer, isMusicLink } from "./importer.svelte.js";
 
 class Search {
-  source = $state(localStorage.getItem("hum.source") || "ytmusic");
+  source = $state(localStorage.getItem("kite.source") || "ytmusic");
   query = $state("");
   results = $state([]);
   libraryHits = $state([]);
@@ -64,7 +64,7 @@ class Search {
   pickSource(id) {
     if (this.source === id) return;
     this.source = id;
-    localStorage.setItem("hum.source", id);
+    localStorage.setItem("kite.source", id);
     if (this.query.trim()) this.run();
   }
 }

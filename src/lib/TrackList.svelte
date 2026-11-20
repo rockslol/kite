@@ -21,7 +21,7 @@
   function dragStart(e, i) {
     const t = tracks[i];
     e.dataTransfer.effectAllowed = onmove ? "copyMove" : "copy";
-    e.dataTransfer.setData("application/x-hum-tracks", JSON.stringify([t]));
+    e.dataTransfer.setData("application/x-kite-tracks", JSON.stringify([t]));
     e.dataTransfer.setData("text/plain", `${t.artist} - ${t.title}`);
     dragFrom = i;
   }
@@ -232,10 +232,15 @@
     align-items: flex-end;
     height: 12px;
   }
+  /* Animated with transform, not height: the compositor scales the bars without the page
+     redoing layout and paint every frame. */
   .bars i {
     width: 3px;
+    height: 12px;
     background: var(--text);
     border-radius: 1px;
+    transform-origin: bottom;
+    will-change: transform;
     animation: bounce 0.9s ease-in-out infinite;
   }
   .bars i:nth-child(2) {
@@ -247,10 +252,10 @@
   @keyframes bounce {
     0%,
     100% {
-      height: 4px;
+      transform: scaleY(0.33);
     }
     50% {
-      height: 12px;
+      transform: scaleY(1);
     }
   }
 </style>

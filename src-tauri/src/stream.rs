@@ -1,4 +1,4 @@
-//! Serves audio to the webview through the `hum://` protocol.
+//! Serves audio to the webview through the `kite://` protocol.
 //!
 //! Progressive streams are proxied chunk by chunk with HTTP range requests, so playback starts
 //! right away and seeking works. Streams that can't be proxied that way (HLS) are downloaded to
@@ -81,18 +81,10 @@ impl Streams {
     }
 
     async fn load(&self, page_url: &str) -> Result<Arc<Entry>, String> {
-        let t0 = Instant::now();
         let r = {
             let _permit = self.resolving.acquire().await.map_err(|e| e.to_string())?;
             self.yt.resolve(page_url).await?
         };
-        eprintln!(
-            "[hum] resolved in {} ms: ext={} hls={} available_in={:?}s {page_url}",
-            t0.elapsed().as_millis(),
-            r.ext,
-            r.hls,
-            r.available_at.map(|t| t as i64 - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        );
         let source = if r.hls {
             tokio::fs::create_dir_all(&self.cache_dir).await.map_err(|e| e.to_string())?;
             let stem = self.cache_dir.join(cache_key(page_url));
@@ -105,36 +97,12 @@ impl Streams {
         Ok(Arc::new(Entry { source, at: Instant::now() }))
     }
 
-    /// Fetches the first bytes the same way the player would and describes the result.
-    /// Shown in the UI when the audio element fails, so errors are visible without a debugger.
-    pub async fn diagnose(&self, page_url: &str) -> String {
-        let entry = match self.entry(page_url).await {
-            Ok(e) => e,
-            Err(e) => return format!("resolve failed: {e}"),
-        };
-        match &entry.source {
-            Source::File { path, mime } => format!("cached file {} ({mime})", path.display()),
-            Source::Remote { url, headers, mime, available_at } => {
-                let host = url.split('/').nth(2).unwrap_or("?").to_string();
-                match self.proxy(url, headers, mime, *available_at, Some((0, Some(1023)))).await {
-                    Ok(r) => format!(
-                        "upstream {host} answered {} with {} bytes as {mime}, {:?}",
-                        r.status(),
-                        r.body().len(),
-                        r.headers().get(header::CONTENT_RANGE)
-                    ),
-                    Err(e) => format!("upstream {host}: {e}"),
-                }
-            }
-        }
-    }
-
     pub async fn handle(&self, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
         let resp = self.handle_inner(&req).await;
         let status = resp.status();
         if !status.is_success() {
             eprintln!(
-                "[hum] {} {} -> {status}: {}",
+                "[kite] {} {} -> {status}: {}",
                 req.uri(),
                 req.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("-"),
                 String::from_utf8_lossy(resp.body())
@@ -196,7 +164,6 @@ impl Streams {
         let unix_now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         let ready = available_at.map(|t| Duration::from_secs(t));
 
-        let t0 = Instant::now();
         let mut tries = 0;
         let resp = loop {
             let mut up = self.http.get(url);
@@ -217,7 +184,6 @@ impl Streams {
             }
             break resp;
         };
-        eprintln!("[hum] upstream bytes={start}-{end} -> {} after {} ms, {tries} retries", resp.status(), t0.elapsed().as_millis());
 
         let status = resp.status();
         if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {

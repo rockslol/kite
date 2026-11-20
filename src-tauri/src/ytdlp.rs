@@ -5,6 +5,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::RwLock;
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
@@ -20,6 +21,28 @@ const ASSET: &str = "yt-dlp.exe";
 const ASSET: &str = "yt-dlp_macos";
 #[cfg(all(unix, not(target_os = "macos")))]
 const ASSET: &str = "yt-dlp_linux";
+
+/// QuickJS, the JavaScript runtime yt-dlp uses for YouTube when neither Deno nor Node is
+/// installed. Pinned to one release and checked against its published SHA-256.
+const QJS_RELEASE: &str = "https://github.com/quickjs-ng/quickjs/releases/download/v0.18.0";
+#[cfg(all(windows, target_arch = "x86_64"))]
+const QJS: Option<(&str, &str, &str)> =
+    Some(("qjs-windows-x86_64.exe", "qjs.exe", "ff03398d74ea6e6bd3a8e58058f7003225abcac229d7d57775b7aaae812a49c7"));
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const QJS: Option<(&str, &str, &str)> =
+    Some(("qjs-darwin-arm64", "qjs", "91fe89916d3b0a6c01c4dc8382a99c3c1fd91ecfc214aa81ca051902bcce590d"));
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const QJS: Option<(&str, &str, &str)> =
+    Some(("qjs-darwin-x86_64", "qjs", "fa2c5dc78095daff566b32fab995ced12927875253b84216b91b834af2ef2b74"));
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const QJS: Option<(&str, &str, &str)> =
+    Some(("qjs-linux-x86_64", "qjs", "85ded23b9fabe8c1644fc40a8d2bbdd71157affcbd807359c618cc717ee24d7d"));
+#[cfg(not(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", any(target_arch = "aarch64", target_arch = "x86_64")),
+    all(target_os = "linux", target_arch = "x86_64")
+)))]
+const QJS: Option<(&str, &str, &str)> = None;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "state", rename_all = "lowercase")]
@@ -60,29 +83,83 @@ pub struct Resolved {
     pub available_at: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct ToolInfo {
+    pub ytdlp_version: String,
+    pub js_runtime: String,
+}
+
 pub struct YtDlp {
     bin: PathBuf,
+    bin_dir: PathBuf,
     cache_dir: PathBuf,
-    js_args: Vec<String>,
+    js_args: RwLock<Vec<String>>,
+    info: RwLock<ToolInfo>,
     status: watch::Sender<ToolStatus>,
 }
 
 impl YtDlp {
     pub fn new(bin_dir: &Path, cache_dir: &Path) -> Self {
-        // yt-dlp needs a JavaScript runtime for full YouTube support. It uses Deno by default;
-        // if only Node is installed, tell it to use that instead.
-        let js_args = if find_on_path("deno").is_none() && find_on_path("node").is_some() {
-            vec!["--js-runtimes".into(), "node".into()]
-        } else {
-            vec![]
-        };
         let (status, _) = watch::channel(ToolStatus::Checking);
         Self {
             bin: bin_dir.join(ASSET),
+            bin_dir: bin_dir.to_path_buf(),
             cache_dir: cache_dir.join("yt-dlp"),
-            js_args,
+            js_args: RwLock::new(vec![]),
+            info: RwLock::new(ToolInfo::default()),
             status,
         }
+    }
+
+    pub fn info(&self) -> ToolInfo {
+        self.info.read().map(|i| i.clone()).unwrap_or_default()
+    }
+
+    /// yt-dlp needs a JavaScript runtime for full YouTube support. Prefer Deno (yt-dlp's
+    /// default) or Node if installed; otherwise download QuickJS next to yt-dlp.
+    async fn pick_js_runtime(&self, http: &reqwest::Client) {
+        let (name, args): (&str, Vec<String>) = if find_on_path("deno").is_some() {
+            ("Deno", vec![])
+        } else if find_on_path("node").is_some() {
+            ("Node.js", vec!["--js-runtimes".into(), "node".into()])
+        } else if let Some((asset, file, sha)) = QJS {
+            let path = self.bin_dir.join(file);
+            let url = format!("{QJS_RELEASE}/{asset}");
+            let ok = path.exists() || download_verified(http, &url, sha, &path).await.is_ok();
+            if ok {
+                let arg = format!("quickjs:{}", path.display());
+                ("QuickJS", vec!["--no-js-runtimes".into(), "--js-runtimes".into(), arg])
+            } else {
+                ("none", vec![])
+            }
+        } else {
+            ("none", vec![])
+        };
+        if let Ok(mut a) = self.js_args.write() {
+            *a = args;
+        }
+        if let Ok(mut i) = self.info.write() {
+            i.js_runtime = name.to_string();
+        }
+    }
+
+    async fn read_version(&self) {
+        if let Ok(out) = self.run(&["--version"]).await {
+            if let Ok(mut i) = self.info.write() {
+                i.ytdlp_version = String::from_utf8_lossy(&out).trim().to_string();
+            }
+        }
+    }
+
+    /// Updates yt-dlp now (Settings button). Returns the new version.
+    pub async fn update_now(&self) -> Result<String, String> {
+        self.wait_ready().await?;
+        self.run(&["--update"]).await?;
+        if let Ok(f) = std::fs::File::options().write(true).open(&self.bin) {
+            let _ = f.set_modified(SystemTime::now());
+        }
+        self.read_version().await;
+        Ok(self.info().ytdlp_version)
     }
 
     pub fn status(&self) -> ToolStatus {
@@ -96,16 +173,20 @@ impl YtDlp {
 
     /// Makes sure yt-dlp is installed and recent. Runs once at startup in the background.
     pub async fn ensure(&self, app: AppHandle, http: reqwest::Client) {
-        if !self.bin.exists() {
+        let fresh_install = !self.bin.exists();
+        if fresh_install {
             self.set_status(&app, ToolStatus::Downloading);
             if let Err(e) = self.fetch(&http).await {
                 self.set_status(&app, ToolStatus::Error { message: format!("Couldn't download yt-dlp: {e}") });
                 return;
             }
-            self.set_status(&app, ToolStatus::Ready);
+        }
+        self.pick_js_runtime(&http).await;
+        self.set_status(&app, ToolStatus::Ready);
+        self.read_version().await;
+        if fresh_install {
             return;
         }
-        self.set_status(&app, ToolStatus::Ready);
 
         let stale = std::fs::metadata(&self.bin)
             .and_then(|m| m.modified())
@@ -118,6 +199,7 @@ impl YtDlp {
             if let Ok(f) = std::fs::File::options().write(true).open(&self.bin) {
                 let _ = f.set_modified(SystemTime::now());
             }
+            self.read_version().await;
         }
     }
 
@@ -184,7 +266,7 @@ impl YtDlp {
         let mut cmd = Command::new(&self.bin);
         cmd.args(["--ignore-config", "--no-warnings", "--no-progress", "--cache-dir"])
             .arg(&self.cache_dir)
-            .args(&self.js_args)
+            .args(self.js_args.read().map(|a| a.clone()).unwrap_or_default())
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -350,6 +432,34 @@ fn pick_thumbnail(list: &Value) -> Option<String> {
         .find(|t| t["id"].as_str() == Some("t300x300") || t["url"].as_str().is_some_and(|u| u.contains("t300x300")))
         .and_then(url)
         .or_else(|| list.last().and_then(url))
+}
+
+/// Downloads a file and keeps it only if its SHA-256 matches.
+async fn download_verified(http: &reqwest::Client, url: &str, sha256: &str, dest: &Path) -> Result<(), String> {
+    let bytes = http
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    if actual != sha256 {
+        return Err("checksum mismatch".into());
+    }
+    if let Some(dir) = dest.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    }
+    let part = dest.with_extension("part");
+    tokio::fs::write(&part, &bytes).await.map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755));
+    }
+    tokio::fs::rename(&part, dest).await.map_err(|e| e.to_string())
 }
 
 fn find_on_path(name: &str) -> Option<PathBuf> {

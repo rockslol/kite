@@ -39,11 +39,11 @@ fn create(app: &AppHandle) -> Option<MediaControls> {
     let hwnd = None;
 
     let mut controls = MediaControls::new(PlatformConfig {
-        display_name: "Hum",
-        dbus_name: "app.hum.player",
+        display_name: "Kite",
+        dbus_name: "app.kite.player",
         hwnd,
     })
-    .map_err(|e| eprintln!("[hum] media controls unavailable: {e:?}"))
+    .map_err(|e| eprintln!("[kite] media controls unavailable: {e:?}"))
     .ok()?;
 
     let app = app.clone();
@@ -74,7 +74,7 @@ fn create(app: &AppHandle) -> Option<MediaControls> {
             };
             let _ = app.emit("media-control", payload);
         })
-        .map_err(|e| eprintln!("[hum] couldn't attach media controls: {e:?}"))
+        .map_err(|e| eprintln!("[kite] couldn't attach media controls: {e:?}"))
         .ok()?;
     Some(controls)
 }

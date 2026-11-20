@@ -17,6 +17,8 @@
   import HistoryView from "./views/HistoryView.svelte";
   import LocalView from "./views/LocalView.svelte";
   import PlaylistView from "./views/PlaylistView.svelte";
+  import SettingsView from "./views/SettingsView.svelte";
+  import "./lib/updates.svelte.js";
 
   const SOURCES = [
     { id: "ytmusic", label: "YouTube Music" },
@@ -78,7 +80,7 @@
 
 <div class="app">
   <header>
-    <div class="brand">Hum</div>
+    <div class="brand">Kite</div>
     <form class="search" onsubmit={submit}>
       <svg viewBox="0 0 24 24" class="glass" aria-hidden="true">
         <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4 4" />
@@ -118,6 +120,8 @@
         <HistoryView />
       {:else if nav.view.name === "local"}
         <LocalView />
+      {:else if nav.view.name === "settings"}
+        <SettingsView />
       {:else if nav.view.name === "playlist"}
         {#key nav.view.id}<PlaylistView id={nav.view.id} />{/key}
       {:else}

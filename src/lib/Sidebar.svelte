@@ -2,6 +2,7 @@
   import { library } from "./library.svelte.js";
   import { nav, menu } from "./ui.svelte.js";
   import { importer } from "./importer.svelte.js";
+  import { updates } from "./updates.svelte.js";
 
   const MAIN = [
     { name: "search", label: "Search" },
@@ -41,7 +42,7 @@
   }
 
   function dragOver(e, target) {
-    if (!e.dataTransfer.types.includes("application/x-hum-tracks")) return;
+    if (!e.dataTransfer.types.includes("application/x-kite-tracks")) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     dropTarget = target;
@@ -49,7 +50,7 @@
   async function drop(e, target) {
     e.preventDefault();
     dropTarget = null;
-    const tracks = JSON.parse(e.dataTransfer.getData("application/x-hum-tracks") || "[]");
+    const tracks = JSON.parse(e.dataTransfer.getData("application/x-kite-tracks") || "[]");
     if (!tracks.length) return;
     if (target === "liked") {
       for (const t of tracks) if (!library.isLiked(t)) await library.toggleLike(t);
@@ -123,6 +124,13 @@
         Create a playlist, drop a song here, or import one from Spotify, Deezer or YouTube
       </button>
     {/each}
+  </div>
+
+  <div class="bottom">
+    <button class="item" class:on={nav.is("settings")} onclick={() => nav.go({ name: "settings" })}>
+      Settings
+      {#if updates.available}<span class="dot" title="Update available"></span>{/if}
+    </button>
   </div>
 </nav>
 
@@ -208,6 +216,16 @@
     stroke: currentColor;
     stroke-width: 2;
     stroke-linecap: round;
+  }
+  .bottom {
+    margin-top: auto;
+    padding-top: 8px;
+  }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text);
   }
   .spinner {
     width: 12px;

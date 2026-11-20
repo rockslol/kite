@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app;
 mod import;
 mod library;
 mod local;
@@ -39,7 +40,7 @@ async fn search(state: State<'_, AppState>, source: String, query: String) -> Re
             Ok(found) if !found.is_empty() => return Ok(found),
             Ok(_) => return Ok(vec![]),
             // YouTube Music changed something: fall back to plain YouTube search.
-            Err(e) => eprintln!("[hum] YouTube Music search failed, using YouTube: {e}"),
+            Err(e) => eprintln!("[kite] YouTube Music search failed, using YouTube: {e}"),
         }
         return state.yt.search("youtube", query).await;
     }
@@ -53,15 +54,17 @@ async fn prepare(state: State<'_, AppState>, url: String) -> Result<(), String> 
     state.streams.prepare(&url).await
 }
 
-#[tauri::command]
-async fn diagnose(state: State<'_, AppState>, url: String) -> Result<String, String> {
-    Ok(state.streams.diagnose(&url).await)
-}
-
 fn main() {
     tauri::Builder::default()
+        // Opening Kite again shows the running copy instead of starting a second one.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| app::show_main(app)))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .register_asynchronous_uri_scheme_protocol("hum", |ctx, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("kite", |ctx, request, responder| {
             let Some(state) = ctx.app_handle().try_state::<AppState>() else {
                 responder.respond(
                     tauri::http::Response::builder().status(503).body(Vec::new()).unwrap(),
@@ -81,9 +84,40 @@ fn main() {
                 responder.respond(resp);
             });
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let close_to_tray = window.app_handle().try_state::<app::Prefs>().is_some_and(|p| p.get().close_to_tray);
+                if close_to_tray {
+                    api.prevent_close();
+                    if let Some(w) = window.app_handle().get_webview_window(window.label()) {
+                        app::set_shown(&w, false);
+                    }
+                }
+            }
+        })
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?;
+            // The app was called Hum before 0.2: carry its library, settings and tools over.
+            let old_dir = data_dir.with_file_name("app.hum.player");
+            if !data_dir.exists() && old_dir.is_dir() {
+                let _ = std::fs::rename(&old_dir, &data_dir);
+            }
+            std::fs::create_dir_all(&data_dir)?;
+            let prefs = app::Prefs::load(&data_dir);
+            let check_updates = prefs.get().check_updates;
+            app.manage(prefs);
+            app.manage(app::CacheDirs(vec![cache_dir.join("audio"), data_dir.join("artwork").join("web")]));
+            app::build_tray(app)?;
+            // Started with Windows: stay in the tray.
+            if std::env::args().any(|a| a == "--autostart") {
+                if let Some(w) = app.get_webview_window("main") {
+                    app::set_shown(&w, false);
+                }
+            }
+            if check_updates && !cfg!(debug_assertions) {
+                app::check_updates_later(app.handle().clone());
+            }
             let http = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(15))
                 .timeout(Duration::from_secs(120))
@@ -105,7 +139,16 @@ fn main() {
             tool_status,
             search,
             prepare,
-            diagnose,
+            app::tray_tooltip,
+            app::settings_get,
+            app::settings_set,
+            app::autostart_set,
+            app::tools_info,
+            app::tools_update,
+            app::cache_size,
+            app::cache_clear,
+            app::update_check,
+            app::update_install,
             media::media_track,
             media::media_state,
             library::lib_like,
@@ -135,5 +178,5 @@ fn main() {
             import::match_choose
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Hum");
+        .expect("error while running Kite");
 }

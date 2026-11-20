@@ -2,11 +2,11 @@
 
 class Nav {
   /** { name: "search" | "liked" | "history" | "local" | "playlist", id?: number } */
-  view = $state(JSON.parse(localStorage.getItem("hum.view") || '{"name":"search"}'));
+  view = $state(JSON.parse(localStorage.getItem("kite.view") || '{"name":"search"}'));
 
   go(view) {
     this.view = view;
-    localStorage.setItem("hum.view", JSON.stringify(view));
+    localStorage.setItem("kite.view", JSON.stringify(view));
   }
 
   is(name, id) {

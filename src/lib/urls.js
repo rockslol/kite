@@ -1,6 +1,6 @@
-// URLs into the backend's hum:// protocol.
+// URLs into the backend's kite:// protocol.
 
-const BASE = navigator.userAgent.includes("Windows") ? "http://hum.localhost" : "hum://localhost";
+const BASE = navigator.userAgent.includes("Windows") ? "http://kite.localhost" : "kite://localhost";
 
 /** Where the audio element loads a track from. */
 export function streamUrl(track) {

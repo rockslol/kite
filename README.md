@@ -1,24 +1,28 @@
-# Hum
+# Kite
 
-A lightweight, open-source music player for YouTube and SoundCloud, for Windows and macOS.
+A lightweight, open-source music player for YouTube Music, YouTube, SoundCloud and your own files, for Windows and macOS.
 
-No account, no ads, no telemetry. Built with Tauri, so it uses the webview your system already has instead of shipping its own browser.
+No account, no ads, no telemetry. Built with Tauri, so it uses the webview your system already has instead of shipping its own browser. The installer is about 3 MB.
 
 ## Features
 
-- Search and play from YouTube and SoundCloud
-- Queue with previous and next, seeking, volume
-- Space to play or pause, `/` or Ctrl+F to search
-
-Planned: local files, playlists, playlist import from Spotify, Deezer and YouTube Music, an equalizer, synced lyrics, Last.fm and Discord status.
+- Search YouTube Music, YouTube and SoundCloud, or paste a link to play it
+- Import playlists from Spotify, Deezer, YouTube Music, YouTube and SoundCloud, and keep them in sync
+- Liked songs, playlists, recently played and most played
+- Local files: MP3, FLAC, M4A, OGG, Opus and WAV, with tags and cover art
+- Queue with drag to reorder, shuffle and repeat
+- Works with your media keys and the system media controls
+- Keeps playing in the tray when the window is closed
 
 ## How it works
 
-Hum uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) to find streams. It downloads yt-dlp the first time it starts, checks it against the official checksums, and keeps it updated, so the installer stays small and site changes don't need a new Hum release.
+Kite uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) to find streams. It downloads yt-dlp the first time it starts, checks it against the official checksums, and keeps it updated, so the installer stays small and site changes don't need a new Kite release.
 
-Audio is passed through Hum's own `hum://` protocol inside the app. No local web server is opened.
+YouTube needs a JavaScript runtime. Kite uses Deno or Node.js if you have one, and otherwise downloads [QuickJS](https://github.com/quickjs-ng/quickjs) (about 2 MB, checked against a fixed checksum).
 
-For full YouTube support yt-dlp needs a JavaScript runtime. Install [Deno](https://deno.com), or Node.js, which Hum will use if it finds it.
+Spotify and Deezer songs are matched to the same song on YouTube Music. Kite never streams from Spotify or Deezer.
+
+Audio goes through Kite's own `kite://` protocol inside the app. No local web server is opened.
 
 ## Building
 

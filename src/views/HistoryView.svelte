@@ -10,14 +10,14 @@
     { id: "top", label: "Most played" },
   ];
 
-  let mode = $state(localStorage.getItem("hum.historyMode") || "recent");
+  let mode = $state(localStorage.getItem("kite.historyMode") || "recent");
   let tracks = $state([]);
   let loaded = $state(false);
 
   $effect(() => {
     library.version;
     const order = mode;
-    localStorage.setItem("hum.historyMode", order);
+    localStorage.setItem("kite.historyMode", order);
     invoke("lib_history", { order, limit: 200 }).then((t) => {
       if (order !== mode) return;
       tracks = t;
