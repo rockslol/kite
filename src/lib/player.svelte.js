@@ -10,6 +10,9 @@ const POS_KEY = "kite.position";
 const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
 /** Start loading the next song this many seconds before the current one ends. */
 const PRELOAD_BEFORE_END = 25;
+/** Paused longer than this, a stream song restarts at the same spot instead of resuming the old
+ *  connection (its link may have expired, or the PC slept in between). */
+const LONG_PAUSE = 20 * 60 * 1000;
 
 let seq = 0;
 const newKey = () => `${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -53,6 +56,8 @@ class Player {
   #resumeAt = 0;
   #original = null; // queue order before shuffling, as keys
   #counted = false;
+  #pausedAt = 0;
+  #retry = { key: null, at: 0 }; // last silent retry, so a broken song isn't retried forever
 
   constructor() {
     this.#audio.preload = "auto";
@@ -193,7 +198,11 @@ class Player {
       return this.#playAt(this.index, this.#resumeAt);
     }
     if (this.error) return this.#playAt(this.index, this.#resumeAt);
-    this.#audio.paused ? this.#audio.play() : this.#audio.pause();
+    if (!this.#audio.paused) return this.#audio.pause();
+    if (this.current.source !== "local" && !this.#audio.ended && Date.now() - this.#pausedAt > LONG_PAUSE) {
+      return this.#playAt(this.index, this.#audio.currentTime, true);
+    }
+    this.#audio.play();
   }
 
   /** Stops a song that's still loading and keeps where it would have started. */
@@ -244,9 +253,19 @@ class Player {
     this.seek(this.#audio.currentTime + delta);
   }
 
+  /** Dev builds only, for test scripts: pretend the pause began `ms` earlier, and reach the
+   *  active audio element. */
+  _test(ms = 0) {
+    if (!import.meta.env.DEV) return null;
+    this.#pausedAt -= ms;
+    return this.#audio;
+  }
+
   // ---- internals ---------------------------------------------------------
 
-  async #playAt(i, startAt = 0) {
+  /** `resume`: the same song again (after a long pause or a dropped stream), so it isn't
+   *  counted as a new play. */
+  async #playAt(i, startAt = 0, resume = false) {
     const track = this.queue[i];
     if (!track) return;
     this.#clearStandby();
@@ -261,7 +280,7 @@ class Player {
     this.time = startAt;
     this.duration = track.duration || 0;
     this.#resumeAt = 0;
-    this.#counted = false;
+    if (!resume) this.#counted = false;
     this.#sendTrack(track);
 
     try {
@@ -369,6 +388,7 @@ class Player {
     });
     a.addEventListener("pause", () => {
       if (!active()) return;
+      this.#pausedAt = Date.now();
       this.playing = false;
       this.#media("paused");
       this.#savePosition();
@@ -412,7 +432,17 @@ class Player {
       if (!a.getAttribute("src")) return;
       // A standby that failed to load: forget it, the normal path will try again.
       if (!active()) return void (this.#standbyKey = null);
-      if (this.current) this.#failed();
+      const t = this.current;
+      if (!t) return;
+      // A song that was already playing lost its stream (an expired link, a network blip): load
+      // it again at the same spot, once a minute at most, before giving up on it.
+      const at = a.currentTime;
+      const recent = this.#retry.key === t.key && Date.now() - this.#retry.at < 60_000;
+      if (at > 1 && !recent) {
+        this.#retry = { key: t.key, at: Date.now() };
+        return void this.#playAt(this.index, at, true);
+      }
+      this.#failed();
     });
   }
 

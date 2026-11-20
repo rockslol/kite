@@ -747,6 +747,7 @@ pub fn lib_folders(lib: Lib<'_>) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn lib_add_folder(app: AppHandle, lib: Lib<'_>, path: String) -> Result<(), String> {
     lib.with(|c| c.execute("INSERT OR IGNORE INTO folders (path, added_at) VALUES (?1, ?2)", params![path, now()]))?;
+    crate::watch::refresh(&app);
     crate::local::rescan(app, lib.inner().clone());
     Ok(())
 }
@@ -757,6 +758,7 @@ pub fn lib_remove_folder(app: AppHandle, lib: Lib<'_>, path: String) -> Result<(
         c.execute("DELETE FROM folders WHERE path = ?1", [&path])?;
         c.execute("DELETE FROM tracks WHERE source = 'local' AND folder = ?1", [&path])
     })?;
+    crate::watch::refresh(&app);
     changed(&app, "local");
     Ok(())
 }

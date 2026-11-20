@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Emitter};
 
-const AUDIO: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav"];
+pub const AUDIO: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav"];
 const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 
 /// Rescans all folders in the background. Does nothing if a scan is already running.

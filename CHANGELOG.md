@@ -10,11 +10,13 @@ What changed in each version of Kite. The newest version is at the top.
 - **No gaps between songs.** Kite loads the next song before the current one ends, and **Next** is instant.
 - **Songs that can't play are skipped** with a short message, instead of stopping the queue.
 - **Play all** and **Shuffle** for search results.
+- **Resuming after a long pause just works.** A song paused for more than 20 minutes (or one whose stream dropped mid-song) picks up where it was, instead of failing or skipping.
 
 ### Library
 
 - **Select several songs** with Ctrl+click and Shift+click (Ctrl+A selects the whole list, Esc clears it). Right-click the selection to play it, queue it, like it or add it to a playlist, or drag it onto a playlist in the sidebar.
 - **Undo**: deleting a playlist, removing songs from a playlist and clearing the queue now show an **Undo** button for a few seconds. Deleting a playlist no longer asks you to confirm first.
+- **Music folders are watched** while Kite runs: songs you add, rename, move or delete show up in Local files within a few seconds, no restart or Rescan needed.
 - **Back up or move your library** (Settings → Library): export liked songs, playlists, history and music folders to one file, and import it on another PC. Importing adds what's missing and keeps what you have, so importing twice is safe.
 
 ## 0.1.0 (2026-11-20)

@@ -80,6 +80,30 @@ impl Streams {
         slot.get_or_init(|| self.load(page_url)).await.clone()
     }
 
+    /// Debug builds only, for testing: make every cached stream link invalid, as if it had
+    /// expired upstream.
+    #[cfg(debug_assertions)]
+    pub fn break_links(&self) -> usize {
+        let mut n = 0;
+        for slot in self.slots.lock().unwrap().values_mut() {
+            let Some(Ok(e)) = slot.get() else { continue };
+            let Source::Remote { url, headers, mime, available_at } = &e.source else { continue };
+            // `expire` is covered by the signature, so changing it makes the server refuse the link.
+            let broken = Entry {
+                source: Source::Remote {
+                    url: url.replacen("expire=", "expire=1", 1),
+                    headers: headers.clone(),
+                    mime,
+                    available_at: *available_at,
+                },
+                at: e.at,
+            };
+            *slot = Arc::new(OnceCell::new_with(Some(Ok(Arc::new(broken)))));
+            n += 1;
+        }
+        n
+    }
+
     fn forget(&self, page_url: &str) {
         self.slots.lock().unwrap().remove(page_url);
     }

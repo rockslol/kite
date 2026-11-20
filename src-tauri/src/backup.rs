@@ -274,6 +274,9 @@ pub async fn lib_import(app: AppHandle, lib: Lib<'_>, path: String) -> Result<Su
     for what in ["likes", "playlists", "history", "local"] {
         let _ = app.emit("library-changed", what);
     }
+    if sum.folders > 0 {
+        crate::watch::refresh(&app);
+    }
     if sum.folders > 0 || b.tracks.iter().any(|t| t.path.is_some()) {
         crate::local::rescan(app, lib.inner().clone());
     }

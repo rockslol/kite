@@ -9,6 +9,7 @@ mod media;
 mod stream;
 mod titles;
 mod ytdlp;
+mod watch;
 mod ytmusic;
 
 use library::Library;
@@ -53,6 +54,18 @@ async fn search(state: State<'_, AppState>, source: String, query: String) -> Re
 #[tauri::command]
 async fn prepare(state: State<'_, AppState>, url: String) -> Result<(), String> {
     state.streams.prepare(&url).await
+}
+
+/// Debug builds only: invalidates cached stream links, to test recovery from expired ones.
+#[tauri::command]
+fn debug_break_streams(state: State<'_, AppState>) -> usize {
+    #[cfg(debug_assertions)]
+    return state.streams.break_links();
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = state;
+        0
+    }
 }
 
 fn main() {
@@ -129,7 +142,8 @@ fn main() {
             let library = Arc::new(Library::open(&data_dir)?);
             app.manage(library.clone());
             app.manage(AppState { yt: yt.clone(), streams, library: library.clone(), http: http.clone() });
-            // Pick up files added or changed while the app was closed.
+            // Pick up files added or changed while the app was closed, then watch for more.
+            watch::start(app.handle(), library.clone());
             local::rescan(app.handle().clone(), library);
 
             let handle = app.handle().clone();
@@ -138,6 +152,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             tool_status,
+            debug_break_streams,
             search,
             prepare,
             app::tray_tooltip,
