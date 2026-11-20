@@ -39,6 +39,9 @@ fn scan(app: &AppHandle, lib: &Library) -> Result<(usize, usize), String> {
     // A separate connection, so the UI's queries aren't blocked during a long scan (WAL mode).
     let mut conn = Connection::open(&lib.db_path).map_err(|e| e.to_string())?;
     conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    // Foreign keys are per connection in SQLite: without this, deleting a vanished file's track
+    // would leave its likes, plays and playlist entries behind.
+    conn.execute_batch("PRAGMA foreign_keys = ON;").map_err(|e| e.to_string())?;
 
     let folders: Vec<String> = {
         let mut st = conn.prepare("SELECT path FROM folders").map_err(|e| e.to_string())?;
@@ -74,7 +77,7 @@ fn scan(app: &AppHandle, lib: &Library) -> Result<(usize, usize), String> {
         if known.get(&path) == Some(&mtime) {
             continue;
         }
-        let folder = folders.iter().find(|f| path.starts_with(f.as_str())).cloned().unwrap_or_default();
+        let folder = folder_for(file, &folders).unwrap_or_default();
         let info = read_tags(file, &lib.art_dir);
         tx.execute(
             "INSERT INTO tracks (url, id, source, title, artist, album, duration, artwork, preview, path, folder, mtime, added_at)
@@ -109,8 +112,24 @@ fn scan(app: &AppHandle, lib: &Library) -> Result<(usize, usize), String> {
     for path in gone {
         tx.execute("DELETE FROM tracks WHERE source = 'local' AND path = ?1", [path]).map_err(|e| e.to_string())?;
     }
+    // A folder removed while this scan ran: drop what the scan just wrote for it.
+    tx.execute(
+        "DELETE FROM tracks WHERE source = 'local' AND folder NOT IN (SELECT path FROM folders)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok((files.len(), updated))
+}
+
+/// The music folder a file belongs to: compared by whole path components (so `C:\Music Videos`
+/// isn't inside `C:\Music`), and the deepest folder wins when folders are nested.
+fn folder_for(file: &Path, folders: &[String]) -> Option<String> {
+    folders
+        .iter()
+        .filter(|f| file.starts_with(Path::new(f.as_str())))
+        .max_by_key(|f| Path::new(f.as_str()).components().count())
+        .cloned()
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
@@ -183,4 +202,19 @@ fn read_tags(file: &Path, art_dir: &Path) -> TagInfo {
 
 fn short_hash(data: &[u8]) -> String {
     Sha256::digest(data).iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_for;
+    use std::path::Path;
+
+    #[test]
+    fn folder_matching_uses_whole_components() {
+        let folders = vec![r"C:\Music".to_string(), r"C:\Music Videos".to_string(), r"C:\Music\Rock".to_string()];
+        assert_eq!(folder_for(Path::new(r"C:\Music Videos\a.mp3"), &folders).as_deref(), Some(r"C:\Music Videos"));
+        assert_eq!(folder_for(Path::new(r"C:\Music\b.mp3"), &folders).as_deref(), Some(r"C:\Music"));
+        assert_eq!(folder_for(Path::new(r"C:\Music\Rock\c.flac"), &folders).as_deref(), Some(r"C:\Music\Rock"));
+        assert_eq!(folder_for(Path::new(r"D:\Other\d.mp3"), &folders), None);
+    }
 }

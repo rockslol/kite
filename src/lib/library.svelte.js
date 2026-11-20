@@ -62,7 +62,13 @@ class Library {
     const liked = !this.liked.has(track.url);
     // Update right away; the backend event confirms it.
     liked ? this.liked.add(track.url) : this.liked.delete(track.url);
-    await invoke("lib_like", { track: plain(track), liked }).catch((e) => toasts.show(String(e)));
+    try {
+      await invoke("lib_like", { track: plain(track), liked });
+    } catch (e) {
+      // Saving failed: put the heart back the way it was.
+      liked ? this.liked.delete(track.url) : this.liked.add(track.url);
+      toasts.show(String(e));
+    }
   }
 
   async createPlaylist(name = "New playlist", tracks = []) {

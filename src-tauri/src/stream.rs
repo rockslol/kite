@@ -60,7 +60,11 @@ impl Streams {
         let slot = {
             let mut slots = self.slots.lock().unwrap();
             let fresh = |s: &Slot| match s.get() {
-                Some(Ok(e)) => e.at.elapsed() < TTL || matches!(e.source, Source::File { .. }),
+                // Cached files stay valid until the file is gone (Settings → Clear cache).
+                Some(Ok(e)) => match &e.source {
+                    Source::File { path, .. } => path.exists(),
+                    Source::Remote { .. } => e.at.elapsed() < TTL,
+                },
                 Some(Err(_)) => false,
                 None => true,
             };
@@ -262,9 +266,14 @@ pub(crate) async fn serve_path(path: &Path, mime: &str, range: Option<(u64, Opti
 /// Parses `bytes=START-` or `bytes=START-END`.
 pub(crate) fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
     let (start, end) = v.strip_prefix("bytes=")?.split(',').next()?.split_once('-')?;
-    let start = start.trim().parse().ok()?;
+    let start: u64 = start.trim().parse().ok()?;
     let end = end.trim();
-    Some((start, if end.is_empty() { None } else { Some(end.parse().ok()?) }))
+    let end: Option<u64> = if end.is_empty() { None } else { Some(end.parse().ok()?) };
+    // A backwards range (`bytes=500-100`) is invalid: ignore it rather than underflow.
+    if end.is_some_and(|e| e < start) {
+        return None;
+    }
+    Some((start, end))
 }
 
 pub(crate) fn mime_for(ext: &str) -> &'static str {
@@ -291,4 +300,17 @@ pub(crate) fn text(status: StatusCode, msg: &str) -> Response<Vec<u8>> {
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(msg.as_bytes().to_vec())
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_range;
+
+    #[test]
+    fn parses_ranges_and_rejects_backwards_ones() {
+        assert_eq!(parse_range("bytes=0-"), Some((0, None)));
+        assert_eq!(parse_range("bytes=100-199"), Some((100, Some(199))));
+        assert_eq!(parse_range("bytes=500-100"), None);
+        assert_eq!(parse_range("items=0-1"), None);
+    }
 }

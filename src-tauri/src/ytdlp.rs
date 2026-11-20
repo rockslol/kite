@@ -13,6 +13,7 @@ use tokio::sync::watch;
 
 const RELEASE_BASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
 const RUN_TIMEOUT: Duration = Duration::from_secs(90);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const UPDATE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[cfg(windows)]
@@ -263,6 +264,10 @@ impl YtDlp {
     }
 
     async fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
+        self.run_for(args, RUN_TIMEOUT).await
+    }
+
+    async fn run_for(&self, args: &[&str], limit: Duration) -> Result<Vec<u8>, String> {
         let mut cmd = Command::new(&self.bin);
         cmd.args(["--ignore-config", "--no-warnings", "--no-progress", "--cache-dir"])
             .arg(&self.cache_dir)
@@ -275,7 +280,7 @@ impl YtDlp {
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
-        let out = tokio::time::timeout(RUN_TIMEOUT, cmd.output())
+        let out = tokio::time::timeout(limit, cmd.output())
             .await
             .map_err(|_| "yt-dlp took too long".to_string())?
             .map_err(|e| format!("couldn't start yt-dlp: {e}"))?;
@@ -358,8 +363,9 @@ impl YtDlp {
     pub async fn download(&self, url: &str, stem: &Path) -> Result<PathBuf, String> {
         self.wait_ready().await?;
         let template = format!("{}.%(ext)s", stem.display());
+        // Whole-song downloads (long HLS mixes) need far longer than a search.
         let out = self
-            .run(&[
+            .run_for(&[
                 "--no-playlist",
                 "-f",
                 "bestaudio/best",
@@ -369,7 +375,7 @@ impl YtDlp {
                 "after_move:filepath",
                 "--",
                 url,
-            ])
+            ], DOWNLOAD_TIMEOUT)
             .await?;
         let path = String::from_utf8_lossy(&out).lines().last().unwrap_or("").trim().to_string();
         if path.is_empty() {

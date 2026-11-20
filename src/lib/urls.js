@@ -31,8 +31,10 @@ export function fmtTime(s) {
 /** "1 h 12 min" style total for list headers. */
 export function fmtTotal(tracks) {
   const s = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
-  const h = Math.floor(s / 3600);
-  const m = Math.round((s % 3600) / 60);
+  // Round once, then split, so 59.5 minutes becomes "1 h 0 min", never "60 min".
+  const total = Math.round(s / 60);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
   return h ? `${h} h ${m} min` : `${m} min`;
 }
 

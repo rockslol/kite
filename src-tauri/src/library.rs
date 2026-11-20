@@ -135,6 +135,12 @@ impl Library {
         for m in MIGRATIONS {
             let _ = conn.execute(m, []);
         }
+        // Rows left behind by older scans that ran without foreign keys.
+        let _ = conn.execute_batch(
+            "DELETE FROM likes WHERE url NOT IN (SELECT url FROM tracks);
+             DELETE FROM playlist_items WHERE url NOT IN (SELECT url FROM tracks);
+             DELETE FROM plays WHERE url NOT IN (SELECT url FROM tracks);",
+        );
         let art_dir = data_dir.join("artwork");
         std::fs::create_dir_all(&art_dir).map_err(err)?;
         Ok(Self { conn: Mutex::new(conn), db_path, art_dir, scanning: AtomicBool::new(false) })
@@ -209,10 +215,20 @@ impl Library {
     pub fn replace_item(&self, playlist_id: i64, item_id: i64, track: &Track) -> Result<(), String> {
         self.with(|c| {
             upsert(c, track)?;
-            c.execute(
-                "UPDATE playlist_items SET url = ?1 WHERE id = ?2 AND playlist_id = ?3",
-                params![track.url, item_id, playlist_id],
+            let elsewhere: bool = c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM playlist_items WHERE playlist_id = ?1 AND url = ?2 AND id <> ?3)",
+                params![playlist_id, track.url, item_id],
+                |r| r.get(0),
             )?;
+            if elsewhere {
+                // The chosen version is already in the playlist: drop this entry instead of doubling it.
+                c.execute("DELETE FROM playlist_items WHERE id = ?1 AND playlist_id = ?2", params![item_id, playlist_id])?;
+            } else {
+                c.execute(
+                    "UPDATE playlist_items SET url = ?1 WHERE id = ?2 AND playlist_id = ?3",
+                    params![track.url, item_id, playlist_id],
+                )?;
+            }
             Ok(())
         })
     }
@@ -295,16 +311,13 @@ impl Library {
     /// tracking prevention blocks some image hosts (yt3.googleusercontent.com), and a disk cache
     /// keeps covers showing offline.
     async fn remote_image(&self, req: &Request<Vec<u8>>, http: &reqwest::Client) -> Response<Vec<u8>> {
-        const HOSTS: &[&str] =
-            &["googleusercontent.com", "ytimg.com", "ggpht.com", "sndcdn.com", "dzcdn.net", "scdn.co", "spotifycdn.com"];
         let url = req
             .uri()
             .query()
             .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("u=")))
             .map(|v| percent_decode_str(v).decode_utf8_lossy().into_owned())
             .unwrap_or_default();
-        let host = url.strip_prefix("https://").and_then(|r| r.split('/').next()).unwrap_or("");
-        if !HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+        if !image_url_allowed(&url) {
             return text(StatusCode::FORBIDDEN, "image host not allowed");
         }
         let dir = self.art_dir.join("web");
@@ -345,6 +358,17 @@ impl Library {
             .body(bytes)
             .unwrap()
     }
+}
+
+/// Only https images from the music services' image hosts go through the cover proxy. The URL is
+/// parsed properly: a hand-split host could be fooled by `?`, `#` or `\` in the URL.
+fn image_url_allowed(url: &str) -> bool {
+    const HOSTS: &[&str] =
+        &["googleusercontent.com", "ytimg.com", "ggpht.com", "sndcdn.com", "dzcdn.net", "scdn.co", "spotifycdn.com"];
+    reqwest::Url::parse(url).ok().is_some_and(|u| {
+        u.scheme() == "https"
+            && u.host_str().is_some_and(|host| HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))))
+    })
 }
 
 type Lib<'a> = State<'a, Arc<Library>>;
@@ -623,4 +647,21 @@ pub fn lib_rescan(app: AppHandle, lib: Lib<'_>) {
 #[tauri::command]
 pub fn lib_scanning(lib: Lib<'_>) -> bool {
     lib.scanning.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::image_url_allowed as ok;
+
+    #[test]
+    fn cover_proxy_only_allows_known_image_hosts() {
+        assert!(ok("https://i.ytimg.com/vi/abc/mqdefault.jpg"));
+        assert!(ok("https://yt3.googleusercontent.com/abc=w300-h300"));
+        assert!(ok("https://cdn-images.dzcdn.net/images/cover/x.jpg"));
+        assert!(!ok("http://i.ytimg.com/vi/abc/mqdefault.jpg"));
+        assert!(!ok("https://evil.example?.ytimg.com"));
+        assert!(!ok("https://evil.example#.ytimg.com"));
+        assert!(!ok(r"https://evil.example\.ytimg.com/x"));
+        assert!(!ok("https://ytimg.com.evil.example/x"));
+    }
 }

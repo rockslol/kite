@@ -159,8 +159,22 @@ class Player {
 
   toggle() {
     if (!this.current) return;
-    if (this.error || !this.#audio.src) return this.#playAt(this.index, this.#resumeAt);
+    if (!this.#audio.getAttribute("src")) {
+      // Still resolving the song: a second press cancels instead of starting over.
+      if (this.loading) return this.#cancelLoad();
+      return this.#playAt(this.index, this.#resumeAt);
+    }
+    if (this.error) return this.#playAt(this.index, this.#resumeAt);
     this.#audio.paused ? this.#audio.play() : this.#audio.pause();
+  }
+
+  /** Stops a song that's still loading and keeps where it would have started. */
+  #cancelLoad() {
+    this.#token++;
+    this.loading = false;
+    this.playing = false;
+    this.#resumeAt = this.time;
+    this.#media("paused");
   }
 
   next(auto = false) {
@@ -303,10 +317,10 @@ class Player {
     listen("media-control", ({ payload: p }) => {
       switch (p.action) {
         case "play":
-          if (!this.playing) this.toggle();
+          if (!this.playing && !this.loading) this.toggle();
           break;
         case "pause":
-          if (this.playing) this.toggle();
+          if (this.playing || this.loading) this.toggle();
           break;
         case "toggle":
           this.toggle();

@@ -70,7 +70,7 @@
   $effect(() => {
     if (nav.view.rename && info) {
       startRename();
-      nav.view = { name: "playlist", id };
+      nav.go({ name: "playlist", id }); // also clears the saved flag, so it doesn't reopen next launch
     }
   });
 

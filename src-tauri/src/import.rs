@@ -178,15 +178,19 @@ async fn deezer(http: &reqwest::Client, kind: &str, id: &str) -> Result<Fetched,
         return Ok(Fetched { name: w.title.clone(), items: Items::Match(vec![w]), truncated: false });
     }
     let name = head["title"].as_str().unwrap_or("Deezer playlist").to_string();
-    let mut wanted: Vec<Wanted> = head["tracks"]["data"].as_array().into_iter().flatten().filter_map(song).collect();
+    let first = head["tracks"]["data"].as_array().cloned().unwrap_or_default();
+    // Page by how many entries Deezer returned, not how many parsed, so none are fetched twice.
+    let mut fetched = first.len();
+    let mut wanted: Vec<Wanted> = first.iter().filter_map(song).collect();
     let total = head["nb_tracks"].as_u64().unwrap_or(0) as usize;
-    while kind == "playlist" && wanted.len() < total && wanted.len() < 5000 {
-        let page = get(format!("https://api.deezer.com/playlist/{id}/tracks?index={}&limit=100", wanted.len())).await?;
-        let more: Vec<Wanted> = page["data"].as_array().into_iter().flatten().filter_map(song).collect();
-        if more.is_empty() {
+    while kind == "playlist" && fetched < total && fetched < 5000 {
+        let page = get(format!("https://api.deezer.com/playlist/{id}/tracks?index={fetched}&limit=100")).await?;
+        let data = page["data"].as_array().cloned().unwrap_or_default();
+        if data.is_empty() {
             break;
         }
-        wanted.extend(more);
+        fetched += data.len();
+        wanted.extend(data.iter().filter_map(song));
     }
     Ok(Fetched { name, items: Items::Match(wanted), truncated: false })
 }
