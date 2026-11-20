@@ -1,9 +1,8 @@
 name: Build
 
+# Run by hand (Actions tab) once the repo has the TAURI_SIGNING_PRIVATE_KEY secret.
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 jobs:
   build:
@@ -35,6 +34,9 @@ jobs:
       - run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           args: ${{ matrix.args }}
 

@@ -2,7 +2,13 @@
 
 A lightweight, open-source music player for YouTube Music, YouTube, SoundCloud and your own files, for Windows and macOS.
 
-No account, no ads, no telemetry. Built with Tauri, so it uses the webview your system already has instead of shipping its own browser. The installer is about 3 MB.
+No account, no ads, no telemetry. Built with Tauri, so it uses the webview your system already has instead of shipping its own browser. The installer is about 3 MB, and Kite uses about 160 MB of memory while playing (less than half that when idle).
+
+![Kite searching YouTube Music](docs/screenshot-search.png)
+
+## Download
+
+Get the Windows installer from [Releases](https://github.com/rockslol/kite/releases/latest). Kite updates itself when a new version comes out.
 
 ## Features
 
@@ -13,6 +19,8 @@ No account, no ads, no telemetry. Built with Tauri, so it uses the webview your 
 - Queue with drag to reorder, shuffle and repeat
 - Works with your media keys and the system media controls
 - Keeps playing in the tray when the window is closed
+
+![A playlist in Kite](docs/screenshot-playlist.png)
 
 ## How it works
 
