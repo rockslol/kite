@@ -62,7 +62,19 @@ CREATE TABLE IF NOT EXISTS folders (
     path      TEXT PRIMARY KEY,
     added_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS matches (
+    key         TEXT PRIMARY KEY,
+    track       TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
 ";
+
+/// Columns added after the first release. `ALTER TABLE ADD COLUMN` fails if the column
+/// exists, which is fine.
+const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE playlists ADD COLUMN source_url TEXT",
+    "ALTER TABLE playlist_items ADD COLUMN origin TEXT",
+];
 
 const COLS: &str = "t.id, t.source, t.url, t.title, t.artist, t.album, t.duration, t.artwork, t.preview";
 
@@ -120,9 +132,108 @@ impl Library {
         let db_path = data_dir.join("library.db");
         let conn = Connection::open(&db_path).map_err(err)?;
         conn.execute_batch(SCHEMA).map_err(err)?;
+        for m in MIGRATIONS {
+            let _ = conn.execute(m, []);
+        }
         let art_dir = data_dir.join("artwork");
         std::fs::create_dir_all(&art_dir).map_err(err)?;
         Ok(Self { conn: Mutex::new(conn), db_path, art_dir, scanning: AtomicBool::new(false) })
+    }
+
+    pub fn create_playlist(&self, name: &str, source_url: Option<&str>) -> Result<i64, String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO playlists (name, source_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                params![name, source_url, now()],
+            )?;
+            Ok(c.last_insert_rowid())
+        })
+    }
+
+    /// Appends tracks (with the imported song they stand for, as JSON) to a playlist, skipping
+    /// ones already in it. Returns how many were added.
+    pub fn add_items(&self, id: i64, items: &[(Track, Option<String>)]) -> Result<usize, String> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            let mut pos: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(position), -1) FROM playlist_items WHERE playlist_id = ?1",
+                [id],
+                |r| r.get(0),
+            )?;
+            let mut added = 0;
+            for (t, origin) in items {
+                upsert(&tx, t)?;
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM playlist_items WHERE playlist_id = ?1 AND url = ?2)",
+                    params![id, t.url],
+                    |r| r.get(0),
+                )?;
+                if exists {
+                    continue;
+                }
+                pos += 1;
+                tx.execute(
+                    "INSERT INTO playlist_items (playlist_id, url, position, added_at, origin) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![id, t.url, pos, now(), origin],
+                )?;
+                added += 1;
+            }
+            tx.execute("UPDATE playlists SET updated_at = ?1 WHERE id = ?2", params![now(), id])?;
+            tx.commit()?;
+            Ok(added)
+        })
+    }
+
+    pub fn playlist_source(&self, id: i64) -> Result<Option<String>, String> {
+        self.with(|c| {
+            c.query_row("SELECT source_url FROM playlists WHERE id = ?1", [id], |r| r.get(0))
+                .optional()
+                .map(Option::flatten)
+        })
+    }
+
+    /// The playlist item's track and the imported song it stands for (if it was imported).
+    pub fn item(&self, playlist_id: i64, item_id: i64) -> Result<(Track, Option<String>), String> {
+        self.with(|c| {
+            c.query_row(
+                &format!(
+                    "SELECT {COLS}, i.origin FROM playlist_items i JOIN tracks t ON t.url = i.url
+                     WHERE i.id = ?1 AND i.playlist_id = ?2"
+                ),
+                params![item_id, playlist_id],
+                |r| Ok((row_track(r)?, r.get(9)?)),
+            )
+        })
+    }
+
+    pub fn replace_item(&self, playlist_id: i64, item_id: i64, track: &Track) -> Result<(), String> {
+        self.with(|c| {
+            upsert(c, track)?;
+            c.execute(
+                "UPDATE playlist_items SET url = ?1 WHERE id = ?2 AND playlist_id = ?3",
+                params![track.url, item_id, playlist_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn cached_match(&self, key: &str) -> Option<Track> {
+        let json: Option<String> = self
+            .with(|c| c.query_row("SELECT track FROM matches WHERE key = ?1", [key], |r| r.get(0)).optional())
+            .ok()
+            .flatten();
+        json.and_then(|j| serde_json::from_str(&j).ok())
+    }
+
+    pub fn save_match(&self, key: &str, track: &Track) {
+        let Ok(json) = serde_json::to_string(track) else { return };
+        let _ = self.with(|c| {
+            c.execute(
+                "INSERT INTO matches (key, track, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET track = excluded.track, updated_at = excluded.updated_at",
+                params![key, json, now()],
+            )
+        });
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
@@ -138,9 +249,13 @@ impl Library {
         })
     }
 
-    /// Serves `/file?u=<local url>` (audio) and `/art/<name>` (artwork) to the webview.
-    pub async fn serve(&self, req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    /// Serves `/file?u=<local url>` (audio), `/art/<name>` (artwork from local files) and
+    /// `/img?u=<https url>` (remote artwork, fetched once and cached on disk) to the webview.
+    pub async fn serve(&self, req: &Request<Vec<u8>>, http: &reqwest::Client) -> Response<Vec<u8>> {
         let path = req.uri().path();
+        if path == "/img" {
+            return self.remote_image(req, http).await;
+        }
         let range = req
             .headers()
             .get(header::RANGE)
@@ -174,6 +289,61 @@ impl Library {
         let Some(file) = file else { return text(StatusCode::NOT_FOUND, "not in library") };
         let ext = Path::new(&file).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         serve_path(Path::new(&file), mime_for(&ext), range).await
+    }
+
+    /// Remote artwork goes through here instead of loading in the webview directly: WebView2's
+    /// tracking prevention blocks some image hosts (yt3.googleusercontent.com), and a disk cache
+    /// keeps covers showing offline.
+    async fn remote_image(&self, req: &Request<Vec<u8>>, http: &reqwest::Client) -> Response<Vec<u8>> {
+        const HOSTS: &[&str] =
+            &["googleusercontent.com", "ytimg.com", "ggpht.com", "sndcdn.com", "dzcdn.net", "scdn.co", "spotifycdn.com"];
+        let url = req
+            .uri()
+            .query()
+            .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("u=")))
+            .map(|v| percent_decode_str(v).decode_utf8_lossy().into_owned())
+            .unwrap_or_default();
+        let host = url.strip_prefix("https://").and_then(|r| r.split('/').next()).unwrap_or("");
+        if !HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+            return text(StatusCode::FORBIDDEN, "image host not allowed");
+        }
+        let dir = self.art_dir.join("web");
+        let name: String = {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(url.as_bytes()).iter().take(12).map(|b| format!("{b:02x}")).collect()
+        };
+        let file = dir.join(&name);
+        let bytes = match tokio::fs::read(&file).await {
+            Ok(b) => b,
+            Err(_) => {
+                let fetched = http.get(&url).send().await.and_then(|r| r.error_for_status());
+                let body = match fetched {
+                    Ok(r) => r.bytes().await.map(|b| b.to_vec()),
+                    Err(e) => Err(e),
+                };
+                match body {
+                    Ok(b) if !b.is_empty() && b.len() < 4 * 1024 * 1024 => {
+                        let _ = tokio::fs::create_dir_all(&dir).await;
+                        let _ = tokio::fs::write(&file, &b).await;
+                        b
+                    }
+                    Ok(_) => return text(StatusCode::BAD_GATEWAY, "bad image"),
+                    Err(e) => return text(StatusCode::BAD_GATEWAY, &e.to_string()),
+                }
+            }
+        };
+        let mime = match bytes.get(..4) {
+            Some([0x89, b'P', b'N', b'G']) => "image/png",
+            Some([b'R', b'I', b'F', b'F']) => "image/webp",
+            Some([b'G', b'I', b'F', _]) => "image/gif",
+            _ => "image/jpeg",
+        };
+        Response::builder()
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(bytes)
+            .unwrap()
     }
 }
 
@@ -222,6 +392,7 @@ pub struct PlaylistInfo {
     name: String,
     count: i64,
     covers: Vec<String>,
+    source_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -235,12 +406,14 @@ pub struct PlaylistItem {
 pub fn lib_playlists(lib: Lib<'_>) -> Result<Vec<PlaylistInfo>, String> {
     lib.with(|c| {
         let mut st = c.prepare(
-            "SELECT p.id, p.name, COUNT(i.id) FROM playlists p
+            "SELECT p.id, p.name, COUNT(i.id), p.source_url FROM playlists p
              LEFT JOIN playlist_items i ON i.playlist_id = p.id
              GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
         )?;
         let mut list: Vec<PlaylistInfo> = st
-            .query_map([], |r| Ok(PlaylistInfo { id: r.get(0)?, name: r.get(1)?, count: r.get(2)?, covers: vec![] }))?
+            .query_map([], |r| {
+                Ok(PlaylistInfo { id: r.get(0)?, name: r.get(1)?, count: r.get(2)?, covers: vec![], source_url: r.get(3)? })
+            })?
             .collect::<rusqlite::Result<_>>()?;
         let mut covers = c.prepare(
             "SELECT DISTINCT t.artwork FROM playlist_items i JOIN tracks t ON t.url = i.url
@@ -298,34 +471,8 @@ pub fn lib_playlist_items(lib: Lib<'_>, id: i64) -> Result<Vec<PlaylistItem>, St
 /// Adds tracks to the end of a playlist, skipping ones already in it. Returns how many were added.
 #[tauri::command]
 pub fn lib_playlist_add(app: AppHandle, lib: Lib<'_>, id: i64, tracks: Vec<Track>) -> Result<usize, String> {
-    let added = lib.with(|c| {
-        let tx = c.transaction()?;
-        let mut pos: i64 =
-            tx.query_row("SELECT COALESCE(MAX(position), -1) FROM playlist_items WHERE playlist_id = ?1", [id], |r| {
-                r.get(0)
-            })?;
-        let mut added = 0;
-        for t in &tracks {
-            upsert(&tx, t)?;
-            let exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM playlist_items WHERE playlist_id = ?1 AND url = ?2)",
-                params![id, t.url],
-                |r| r.get(0),
-            )?;
-            if exists {
-                continue;
-            }
-            pos += 1;
-            tx.execute(
-                "INSERT INTO playlist_items (playlist_id, url, position, added_at) VALUES (?1, ?2, ?3, ?4)",
-                params![id, t.url, pos, now()],
-            )?;
-            added += 1;
-        }
-        tx.execute("UPDATE playlists SET updated_at = ?1 WHERE id = ?2", params![now(), id])?;
-        tx.commit()?;
-        Ok(added)
-    })?;
+    let items: Vec<(Track, Option<String>)> = tracks.into_iter().map(|t| (t, None)).collect();
+    let added = lib.add_items(id, &items)?;
     changed(&app, "playlists");
     Ok(added)
 }

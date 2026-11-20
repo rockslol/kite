@@ -4,7 +4,8 @@
   import { library } from "../lib/library.svelte.js";
   import { player } from "../lib/player.svelte.js";
   import { nav, menu } from "../lib/ui.svelte.js";
-  import { artSrc, fmtTotal, plural } from "../lib/urls.js";
+  import { importer } from "../lib/importer.svelte.js";
+  import { artSrc, fmtTime, fmtTotal, plural } from "../lib/urls.js";
 
   let { id } = $props();
 
@@ -15,6 +16,45 @@
   let input = $state();
 
   let info = $derived(library.playlists.find((p) => p.id === id));
+  let result = $derived(importer.results[id]);
+  let showMissing = $state(false);
+  let syncing = $state(false);
+
+  async function sync() {
+    syncing = true;
+    await importer.sync(id, info?.name ?? "Playlist");
+    syncing = false;
+  }
+
+  const SERVICE = [
+    ["spotify", "Spotify"],
+    ["deezer", "Deezer"],
+    ["soundcloud", "SoundCloud"],
+    ["youtube", "YouTube"],
+    ["youtu.be", "YouTube"],
+  ];
+  let sourceName = $derived(info?.source_url ? (SERVICE.find(([k]) => info.source_url.includes(k))?.[1] ?? "a link") : null);
+
+  /** "Wrong song?": swap the menu for other versions once they're found. */
+  async function pickAnother(t) {
+    menu.swap([{ label: "Finding other versions…", keepOpen: true, action: () => {} }]);
+    let found;
+    try {
+      found = await invoke("match_alternatives", { playlistId: id, itemId: t.item_id });
+    } catch (e) {
+      menu.swap([{ label: String(e), action: () => {} }]);
+      return;
+    }
+    if (!menu.current) return;
+    menu.swap(
+      found.length
+        ? found.map((c) => ({
+            label: `${c.title} · ${c.artist} · ${fmtTime(c.duration)}`,
+            action: () => invoke("match_choose", { playlistId: id, itemId: t.item_id, track: c }),
+          }))
+        : [{ label: "No other versions found", action: () => {} }]
+    );
+  }
 
   $effect(() => {
     library.version;
@@ -111,15 +151,42 @@
         <button class="btn primary" onclick={() => player.playList(items, 0)}>Play</button>
         <button class="btn" onclick={() => player.playShuffled(items)}>Shuffle</button>
       {/if}
+      {#if info?.source_url}
+        <button class="btn" onclick={sync} disabled={syncing} title="Add songs that are new on {sourceName}">
+          {syncing ? "Syncing…" : "Sync"}
+        </button>
+      {/if}
       <button class="btn text" onclick={deleteMenu}>Delete</button>
     </div>
   </header>
+
+  {#if result?.missing.length || result?.truncated}
+    <div class="note">
+      {#if result.truncated}
+        <p>Spotify only shares the first 100 songs of a playlist, so the rest aren't here.</p>
+      {/if}
+      {#if result.missing.length}
+        <p>
+          {plural(result.missing.length, "song")} couldn't be found on YouTube Music.
+          <button class="link" onclick={() => (showMissing = !showMissing)}>{showMissing ? "Hide" : "Show"}</button>
+        </p>
+        {#if showMissing}
+          <ul>
+            {#each result.missing as m}<li>{m}</li>{/each}
+          </ul>
+        {/if}
+      {/if}
+    </div>
+  {/if}
 
   {#if items.length}
     <TrackList
       tracks={items}
       onmove={move}
-      extraMenu={(t) => [{ label: "Remove from this playlist", action: () => remove(t) }]}
+      extraMenu={(t) => [
+        { label: "Wrong song? Pick another version", keepOpen: true, action: () => pickAnother(t) },
+        { label: "Remove from this playlist", action: () => remove(t) },
+      ]}
     />
   {:else if loaded}
     <p class="empty">This playlist is empty. Right-click any song and pick "Add to playlist", or drag songs onto it in the sidebar.</p>
@@ -163,6 +230,32 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .note {
+    margin: -4px 8px 14px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .note p {
+    margin: 0;
+  }
+  .note p + p {
+    margin-top: 4px;
+  }
+  .note ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    max-height: 180px;
+    overflow-y: auto;
+    user-select: text;
+  }
+  .link {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
   .rename {
     width: 360px;

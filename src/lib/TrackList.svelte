@@ -85,7 +85,7 @@
         <span class="art">{#if t.artwork}<img src={artSrc(t.artwork)} alt="" loading="lazy" draggable="false" />{/if}</span>
         <span class="meta">
           <span class="title">{t.title}</span>
-          <span class="artist">{t.artist}{#if t.album}<span class="album">{` · ${t.album}`}</span>{/if}</span>
+          <span class="artist">{t.artist}{#if t.album && t.album !== t.title}<span class="album">{` · ${t.album}`}</span>{/if}</span>
         </span>
         <button
           class="heart"

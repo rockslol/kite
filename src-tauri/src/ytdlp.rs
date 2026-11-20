@@ -223,6 +223,25 @@ impl YtDlp {
         Ok(entries.iter().filter_map(|e| to_track(source, e)).collect())
     }
 
+    /// Reads a YouTube/YouTube Music playlist or SoundCloud set/likes. Returns its title and songs.
+    pub async fn playlist(&self, url: &str) -> Result<(String, Vec<Track>), String> {
+        self.wait_ready().await?;
+        let source = source_of(url);
+        let out = self.run(&["--flat-playlist", "-J", "--", url]).await?;
+        let v: Value = serde_json::from_slice(&out).map_err(|e| e.to_string())?;
+        let title = v["title"].as_str().unwrap_or("Imported playlist").to_string();
+        let entries = v["entries"].as_array().cloned().unwrap_or_default();
+        Ok((title, entries.iter().filter_map(|e| to_track(source, e)).collect()))
+    }
+
+    /// Metadata for a single YouTube or SoundCloud link.
+    pub async fn lookup(&self, url: &str) -> Result<Track, String> {
+        self.wait_ready().await?;
+        let out = self.run(&["-J", "--no-playlist", "--skip-download", "--", url]).await?;
+        let v: Value = serde_json::from_slice(&out).map_err(|e| e.to_string())?;
+        to_track(source_of(url), &v).ok_or_else(|| "Couldn't read that link.".to_string())
+    }
+
     pub async fn resolve(&self, url: &str) -> Result<Resolved, String> {
         self.wait_ready().await?;
         // macOS's webview (WebKit) is safest with AAC/MP3, so prefer m4a there. Chromium-based
@@ -278,16 +297,26 @@ impl YtDlp {
     }
 }
 
+pub fn source_of(url: &str) -> &'static str {
+    if url.contains("soundcloud.com") {
+        "soundcloud"
+    } else {
+        "youtube"
+    }
+}
+
 fn to_track(source: &str, e: &Value) -> Option<Track> {
     if e["live_status"].as_str() == Some("is_live") {
         return None;
     }
     let id = e["id"].as_str()?.to_string();
     let title = e["title"].as_str()?.to_string();
-    let url = e["webpage_url"]
-        .as_str()
-        .or_else(|| e["url"].as_str())?
-        .to_string();
+    // One URL form per YouTube video, so music.youtube.com and youtube.com links are the same song.
+    let url = if source == "youtube" {
+        format!("https://www.youtube.com/watch?v={id}")
+    } else {
+        e["webpage_url"].as_str().or_else(|| e["url"].as_str())?.to_string()
+    };
     let channel = e["channel"].as_str().or_else(|| e["uploader"].as_str()).unwrap_or("");
     let (title, artist) = match (source, e["artist"].as_str()) {
         (_, Some(artist)) => (title, artist.to_string()),

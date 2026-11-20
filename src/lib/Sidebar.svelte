@@ -1,6 +1,7 @@
 <script>
   import { library } from "./library.svelte.js";
   import { nav, menu } from "./ui.svelte.js";
+  import { importer } from "./importer.svelte.js";
 
   const MAIN = [
     { name: "search", label: "Search" },
@@ -83,7 +84,16 @@
 
   <div class="head">
     <span>Playlists</span>
-    <button class="add" onclick={newPlaylist} aria-label="New playlist" title="New playlist">
+    <button
+      class="add"
+      onclick={(e) =>
+        menu.open(e, [
+          { label: "New playlist", action: newPlaylist },
+          { label: "Import from a link…", action: () => (importer.dialogOpen = true) },
+        ])}
+      aria-label="New playlist"
+      title="New or import"
+    >
       <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
     </button>
   </div>
@@ -110,7 +120,7 @@
         ondragleave={() => (dropTarget = null)}
         ondrop={(e) => drop(e, "new")}
       >
-        Create a playlist, or drop a song here
+        Create a playlist, drop a song here, or import one from Spotify, Deezer or YouTube
       </button>
     {/each}
   </div>

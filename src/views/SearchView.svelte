@@ -8,7 +8,7 @@
   {#if search.libraryHits.length && search.searchedFor}
     <h2 class="section">In your library</h2>
     <TrackList tracks={search.libraryHits} />
-    <h2 class="section">{search.source === "soundcloud" ? "SoundCloud" : "YouTube"}</h2>
+    <h2 class="section">{{ ytmusic: "YouTube Music", youtube: "YouTube", soundcloud: "SoundCloud" }[search.source]}</h2>
   {/if}
 
   {#if search.error}

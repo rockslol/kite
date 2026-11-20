@@ -10,6 +10,8 @@
   import PlayerBar from "./lib/PlayerBar.svelte";
   import QueuePanel from "./lib/QueuePanel.svelte";
   import ContextMenu from "./lib/ContextMenu.svelte";
+  import ImportDialog from "./lib/ImportDialog.svelte";
+  import { importer } from "./lib/importer.svelte.js";
   import SearchView from "./views/SearchView.svelte";
   import LikedView from "./views/LikedView.svelte";
   import HistoryView from "./views/HistoryView.svelte";
@@ -17,6 +19,7 @@
   import PlaylistView from "./views/PlaylistView.svelte";
 
   const SOURCES = [
+    { id: "ytmusic", label: "YouTube Music" },
     { id: "youtube", label: "YouTube" },
     { id: "soundcloud", label: "SoundCloud" },
   ];
@@ -84,7 +87,7 @@
         bind:this={searchInput}
         bind:value={search.query}
         type="text"
-        placeholder="Search songs"
+        placeholder="Search songs, or paste a link"
         spellcheck="false"
         autocomplete="off"
         onfocus={() => nav.go({ name: "search" })}
@@ -130,6 +133,24 @@
 </div>
 
 <ContextMenu />
+<ImportDialog />
+
+{#if importer.jobs.length}
+  <div class="jobs">
+    {#each importer.jobs as j (j.job)}
+      <div class="job">
+        <span class="spinner"></span>
+        <span>
+          {#if j.state === "matching" && j.total}
+            Finding songs on YouTube Music, {j.done} of {j.total}
+          {:else}
+            {j.label}
+          {/if}
+        </span>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <div class="toasts" aria-live="polite">
   {#each toasts.list as t (t.id)}
@@ -227,6 +248,26 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  .jobs {
+    position: fixed;
+    right: 16px;
+    bottom: 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 55;
+  }
+  .job {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: #141416;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 13px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   }
   .toasts {
     position: fixed;

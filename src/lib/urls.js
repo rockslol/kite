@@ -8,10 +8,15 @@ export function streamUrl(track) {
   return `${BASE}/${route}?u=${encodeURIComponent(track.url)}`;
 }
 
-/** Artwork can be a web URL or `art:<file>` (extracted from a local file's tags). */
+/**
+ * Artwork can be `art:<file>` (from a local file's tags) or a web URL. Web images go through
+ * the backend, which caches them and avoids WebView2 blocking some image hosts.
+ */
 export function artSrc(artwork) {
   if (!artwork) return null;
-  return artwork.startsWith("art:") ? `${BASE}/art/${artwork.slice(4)}` : artwork;
+  if (artwork.startsWith("art:")) return `${BASE}/art/${artwork.slice(4)}`;
+  if (artwork.startsWith("https://")) return `${BASE}/img?u=${encodeURIComponent(artwork)}`;
+  return artwork;
 }
 
 export function fmtTime(s) {

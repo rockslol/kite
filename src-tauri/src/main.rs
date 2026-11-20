@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod import;
 mod library;
 mod local;
 mod media;
 mod stream;
 mod titles;
 mod ytdlp;
+mod ytmusic;
 
 use library::Library;
 use std::sync::Arc;
@@ -14,10 +16,11 @@ use stream::Streams;
 use tauri::{Manager, State};
 use ytdlp::{ToolStatus, Track, YtDlp};
 
-struct AppState {
-    yt: Arc<YtDlp>,
-    streams: Arc<Streams>,
-    library: Arc<Library>,
+pub struct AppState {
+    pub yt: Arc<YtDlp>,
+    pub streams: Arc<Streams>,
+    pub library: Arc<Library>,
+    pub http: reqwest::Client,
 }
 
 #[tauri::command]
@@ -30,6 +33,15 @@ async fn search(state: State<'_, AppState>, source: String, query: String) -> Re
     let query = query.trim();
     if query.is_empty() {
         return Ok(vec![]);
+    }
+    if source == "ytmusic" {
+        match ytmusic::search_songs(&state.http, query).await {
+            Ok(found) if !found.is_empty() => return Ok(found),
+            Ok(_) => return Ok(vec![]),
+            // YouTube Music changed something: fall back to plain YouTube search.
+            Err(e) => eprintln!("[hum] YouTube Music search failed, using YouTube: {e}"),
+        }
+        return state.yt.search("youtube", query).await;
     }
     state.yt.search(&source, query).await
 }
@@ -58,10 +70,11 @@ fn main() {
             };
             let streams = state.streams.clone();
             let library = state.library.clone();
+            let http = state.http.clone();
             tauri::async_runtime::spawn(async move {
                 let path = request.uri().path();
-                let resp = if path.starts_with("/file") || path.starts_with("/art/") {
-                    library.serve(&request).await
+                let resp = if path.starts_with("/file") || path.starts_with("/art/") || path == "/img" {
+                    library.serve(&request, &http).await
                 } else {
                     streams.handle(request).await
                 };
@@ -80,7 +93,7 @@ fn main() {
             let streams = Arc::new(Streams::new(yt.clone(), http.clone(), cache_dir));
             let library = Arc::new(Library::open(&data_dir)?);
             app.manage(library.clone());
-            app.manage(AppState { yt: yt.clone(), streams, library: library.clone() });
+            app.manage(AppState { yt: yt.clone(), streams, library: library.clone(), http: http.clone() });
             // Pick up files added or changed while the app was closed.
             local::rescan(app.handle().clone(), library);
 
@@ -115,7 +128,11 @@ fn main() {
             library::lib_add_folder,
             library::lib_remove_folder,
             library::lib_rescan,
-            library::lib_scanning
+            library::lib_scanning,
+            import::import_link,
+            import::open_link,
+            import::match_alternatives,
+            import::match_choose
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hum");
