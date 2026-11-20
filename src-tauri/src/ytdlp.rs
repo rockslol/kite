@@ -1,6 +1,6 @@
 //! Manages the yt-dlp binary (download, verify, self-update) and runs it for search and stream resolution.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -30,16 +30,22 @@ pub enum ToolStatus {
     Error { message: String },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
     pub source: String,
     pub url: String,
     pub title: String,
+    #[serde(default)]
     pub artist: String,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
     pub duration: Option<f64>,
+    #[serde(default)]
     pub artwork: Option<String>,
     /// SoundCloud Go+ tracks only play a 30 second preview without a subscription.
+    #[serde(default)]
     pub preview: bool,
 }
 
@@ -301,6 +307,7 @@ fn to_track(source: &str, e: &Value) -> Option<Track> {
         url,
         title,
         artist,
+        album: None,
         duration: e["duration"].as_f64(),
         preview: source == "soundcloud" && e["duration"].as_f64().is_some_and(|d| (29.0..=31.0).contains(&d)),
         artwork,

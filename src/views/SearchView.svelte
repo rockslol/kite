@@ -1,0 +1,23 @@
+<script>
+  import TrackList from "../lib/TrackList.svelte";
+  import { search } from "../lib/search.svelte.js";
+  import { player } from "../lib/player.svelte.js";
+</script>
+
+<div class="view">
+  {#if search.libraryHits.length && search.searchedFor}
+    <h2 class="section">In your library</h2>
+    <TrackList tracks={search.libraryHits} />
+    <h2 class="section">{search.source === "soundcloud" ? "SoundCloud" : "YouTube"}</h2>
+  {/if}
+
+  {#if search.error}
+    <p class="empty error">{search.error}</p>
+  {:else if search.results.length}
+    <TrackList tracks={search.results} onhover={(t) => player.warm(t)} />
+  {:else if search.searchedFor && !search.searching}
+    <p class="empty">Nothing found for "{search.searchedFor}".</p>
+  {:else if !search.searching}
+    <p class="empty">Search for a song to start.</p>
+  {/if}
+</div>

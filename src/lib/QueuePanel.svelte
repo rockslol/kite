@@ -1,7 +1,7 @@
 <script>
   import { player } from "./player.svelte.js";
-
-  let { oncontext } = $props();
+  import { menu } from "./ui.svelte.js";
+  import { artSrc } from "./urls.js";
 
   let dragKey = $state(null);
   let dropAt = $state(-1);
@@ -79,13 +79,13 @@
     onkeydown={(e) => e.key === "Enter" && !isCurrent && player.jump(t.key)}
     oncontextmenu={(e) => {
       e.preventDefault();
-      oncontext(e, [
+      menu.open(e, [
         ...(isCurrent ? [] : [{ label: "Play now", action: () => player.jump(t.key) }]),
         { label: "Remove from queue", action: () => player.remove(t.key) },
       ]);
     }}
   >
-    <span class="art">{#if t.artwork}<img src={t.artwork} alt="" loading="lazy" draggable="false" />{/if}</span>
+    <span class="art">{#if t.artwork}<img src={artSrc(t.artwork)} alt="" loading="lazy" draggable="false" />{/if}</span>
     <span class="meta">
       <span class="title">{t.title}</span>
       <span class="artist">{t.artist}</span>

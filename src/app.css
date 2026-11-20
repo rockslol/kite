@@ -60,3 +60,95 @@ input {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
 }
+
+/* Shared by the views */
+.view-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin: 6px 8px 16px;
+}
+.view-head h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: none;
+}
+.btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-weight: 500;
+}
+.btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+.btn.primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: #000;
+}
+.btn.primary:hover {
+  background: #e6e6e6;
+}
+.btn.text {
+  border-color: transparent;
+  color: var(--muted);
+}
+.btn.text:hover:not(:disabled) {
+  color: var(--text);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.section {
+  margin: 10px 8px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.empty {
+  margin: 18vh auto 0;
+  max-width: 420px;
+  text-align: center;
+  color: var(--muted);
+}
+.error {
+  color: var(--error) !important;
+}
+.segmented {
+  display: flex;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.segmented button {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.segmented button:hover {
+  color: var(--text);
+}
+.segmented button.on {
+  background: var(--active);
+  color: var(--text);
+}

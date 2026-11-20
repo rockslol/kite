@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod library;
+mod local;
 mod media;
 mod stream;
 mod titles;
 mod ytdlp;
 
+use library::Library;
 use std::sync::Arc;
 use std::time::Duration;
 use stream::Streams;
@@ -14,6 +17,7 @@ use ytdlp::{ToolStatus, Track, YtDlp};
 struct AppState {
     yt: Arc<YtDlp>,
     streams: Arc<Streams>,
+    library: Arc<Library>,
 }
 
 #[tauri::command]
@@ -44,6 +48,7 @@ async fn diagnose(state: State<'_, AppState>, url: String) -> Result<String, Str
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol("hum", |ctx, request, responder| {
             let Some(state) = ctx.app_handle().try_state::<AppState>() else {
                 responder.respond(
@@ -52,8 +57,15 @@ fn main() {
                 return;
             };
             let streams = state.streams.clone();
+            let library = state.library.clone();
             tauri::async_runtime::spawn(async move {
-                responder.respond(streams.handle(request).await);
+                let path = request.uri().path();
+                let resp = if path.starts_with("/file") || path.starts_with("/art/") {
+                    library.serve(&request).await
+                } else {
+                    streams.handle(request).await
+                };
+                responder.respond(resp);
             });
         })
         .setup(|app| {
@@ -66,7 +78,11 @@ fn main() {
 
             let yt = Arc::new(YtDlp::new(&data_dir.join("bin"), &cache_dir));
             let streams = Arc::new(Streams::new(yt.clone(), http.clone(), cache_dir));
-            app.manage(AppState { yt: yt.clone(), streams });
+            let library = Arc::new(Library::open(&data_dir)?);
+            app.manage(library.clone());
+            app.manage(AppState { yt: yt.clone(), streams, library: library.clone() });
+            // Pick up files added or changed while the app was closed.
+            local::rescan(app.handle().clone(), library);
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move { yt.ensure(handle, http).await });
@@ -78,7 +94,28 @@ fn main() {
             prepare,
             diagnose,
             media::media_track,
-            media::media_state
+            media::media_state,
+            library::lib_like,
+            library::lib_liked,
+            library::lib_liked_urls,
+            library::lib_playlists,
+            library::lib_playlist_create,
+            library::lib_playlist_rename,
+            library::lib_playlist_delete,
+            library::lib_playlist_items,
+            library::lib_playlist_add,
+            library::lib_playlist_remove,
+            library::lib_playlist_move,
+            library::lib_played,
+            library::lib_history,
+            library::lib_clear_history,
+            library::lib_search,
+            library::lib_local_tracks,
+            library::lib_folders,
+            library::lib_add_folder,
+            library::lib_remove_folder,
+            library::lib_rescan,
+            library::lib_scanning
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hum");

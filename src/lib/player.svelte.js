@@ -2,13 +2,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-
-const STREAM_BASE = navigator.userAgent.includes("Windows") ? "http://hum.localhost" : "hum://localhost";
-export const streamUrl = (url) => `${STREAM_BASE}/play?u=${encodeURIComponent(url)}`;
+import { streamUrl } from "./urls.js";
 
 const SAVE_KEY = "hum.session";
 const POS_KEY = "hum.position";
-const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "duration", "artwork", "preview"];
+const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
 
 let seq = 0;
 const newKey = () => `${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -48,6 +46,7 @@ class Player {
   #resumeAt = 0;
   #original = null; // queue order before shuffling, as keys
   #explaining = false;
+  #counted = false;
   #lap = null;
 
   constructor() {
@@ -91,9 +90,16 @@ class Player {
     this.#original?.push(item.key);
   }
 
+  /** Play `tracks` in random order. */
+  playShuffled(tracks) {
+    if (!tracks.length) return;
+    this.shuffle = true;
+    this.playList(tracks, Math.floor(Math.random() * tracks.length));
+  }
+
   /** Resolve a track in the background so it starts faster if it's played. */
   warm(track) {
-    if (track?.url) invoke("prepare", { url: track.url }).catch(() => {});
+    if (track?.url && track.source !== "local") invoke("prepare", { url: track.url }).catch(() => {});
   }
 
   jump(key) {
@@ -212,13 +218,14 @@ class Player {
     this.time = startAt;
     this.duration = track.duration || 0;
     this.#resumeAt = 0;
+    this.#counted = false;
     this.#sendTrack(track);
 
     const tStart = performance.now();
     const lap = (what) => console.log(`[hum] ${what} +${Math.round(performance.now() - tStart)} ms`);
     this.#lap = lap;
     try {
-      await invoke("prepare", { url: track.url });
+      if (track.source !== "local") await invoke("prepare", { url: track.url });
       lap("prepared");
     } catch (e) {
       if (token === this.#token) {
@@ -229,14 +236,13 @@ class Player {
     }
     if (token !== this.#token) return;
 
-    audio.src = streamUrl(track.url);
+    audio.src = streamUrl(track);
     if (startAt > 0) audio.currentTime = startAt;
     audio.play().catch((e) => {
       if (e.name !== "AbortError" && token === this.#token) this.#explain(track, e.message || String(e));
     });
 
-    const following = this.queue[i + 1];
-    if (following) invoke("prepare", { url: following.url }).catch(() => {});
+    this.warm(this.queue[i + 1]);
   }
 
   #stop() {
@@ -270,6 +276,13 @@ class Player {
     let lastSave = 0;
     a.addEventListener("timeupdate", () => {
       if (!this.#dragging) this.time = a.currentTime;
+      // Counts as a play after 30 s, or halfway through shorter songs.
+      if (!this.#counted && this.current && a.currentTime >= Math.min(30, (a.duration || 60) / 2)) {
+        this.#counted = true;
+        const t = this.current;
+        const track = Object.fromEntries(TRACK_FIELDS.map((f) => [f, t[f] ?? null]));
+        invoke("lib_played", { track }).catch(() => {});
+      }
       if (Date.now() - lastSave > 5000) {
         lastSave = Date.now();
         this.#savePosition();
@@ -376,7 +389,7 @@ class Player {
     this.error = mediaMsg;
     let webview;
     try {
-      const r = await fetch(streamUrl(track.url), { headers: { Range: "bytes=0-1023" } });
+      const r = await fetch(streamUrl(track), { headers: { Range: "bytes=0-1023" } });
       const body = r.ok ? `${(await r.arrayBuffer()).byteLength} bytes` : await r.text();
       webview = `webview got ${r.status} ${r.headers.get("content-type") || ""}, ${body}`;
     } catch (e) {

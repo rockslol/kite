@@ -17,6 +17,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 percent-encoding = "2"
 sha2 = "0.10"
 souvlaki = "0.9.3"
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+lofty = "0.25.5"
+tauri-plugin-dialog = "2.8.4"
 
 [profile.release]
 strip = true

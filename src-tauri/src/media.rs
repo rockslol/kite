@@ -94,6 +94,13 @@ pub fn media_track(
     artwork: Option<String>,
     duration: Option<f64>,
 ) {
+    // Artwork from local files is stored as `art:<file>`; the OS wants a real file.
+    let artwork = match artwork.as_deref().and_then(|a| a.strip_prefix("art:")) {
+        Some(name) => app
+            .try_state::<std::sync::Arc<crate::library::Library>>()
+            .map(|lib| format!("file://{}", lib.art_dir.join(name).display())),
+        None => artwork,
+    };
     with_controls(&app, move |c| {
         let _ = c.set_metadata(MediaMetadata {
             title: Some(&title),

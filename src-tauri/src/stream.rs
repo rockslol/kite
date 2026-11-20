@@ -7,7 +7,7 @@
 use crate::ytdlp::YtDlp;
 use percent_encoding::percent_decode_str;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::http::{header, Request, Response, StatusCode};
@@ -164,7 +164,7 @@ impl Streams {
                 Err(e) => return text(StatusCode::BAD_GATEWAY, &e),
             };
             let result = match &entry.source {
-                Source::File { path, mime } => return serve_file(path, mime, range).await,
+                Source::File { path, mime } => return serve_path(path, mime, range).await,
                 Source::Remote { url, headers, mime, available_at } => {
                     self.proxy(url, headers, mime, *available_at, range).await
                 }
@@ -249,40 +249,59 @@ impl Streams {
     }
 }
 
-async fn serve_file(path: &PathBuf, mime: &str, range: Option<(u64, Option<u64>)>) -> Response<Vec<u8>> {
-    let data = match tokio::fs::read(path).await {
-        Ok(d) => d,
+/// Serves part of a file. Open-ended ranges are capped at `CHUNK`, so large files (FLAC) are
+/// read piece by piece instead of all at once.
+pub(crate) async fn serve_path(path: &Path, mime: &str, range: Option<(u64, Option<u64>)>) -> Response<Vec<u8>> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
         Err(e) => return text(StatusCode::NOT_FOUND, &e.to_string()),
     };
-    let total = data.len() as u64;
+    let total = match file.metadata().await {
+        Ok(m) => m.len(),
+        Err(e) => return text(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
     let b = Response::builder()
         .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
-    match range {
-        Some((start, end)) if start < total => {
-            let end = end.unwrap_or(total - 1).min(total - 1);
-            let body = data[start as usize..=end as usize].to_vec();
-            b.status(206)
-                .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
-                .header(header::CONTENT_LENGTH, body.len())
-                .body(body)
-                .unwrap()
+    let (start, end, partial) = match range {
+        Some((start, _)) if start >= total => {
+            return b.status(416).header(header::CONTENT_RANGE, format!("bytes */{total}")).body(Vec::new()).unwrap()
         }
-        Some(_) => b.status(416).header(header::CONTENT_RANGE, format!("bytes */{total}")).body(Vec::new()).unwrap(),
-        None => b.status(200).header(header::CONTENT_LENGTH, total).body(data).unwrap(),
+        Some((start, end)) => (start, end.unwrap_or(start + CHUNK - 1).min(start + CHUNK - 1).min(total - 1), true),
+        // No range: small files go whole, large ones as a first chunk the browser continues from.
+        None if total <= CHUNK => (0, total.saturating_sub(1), false),
+        None => (0, CHUNK - 1, true),
+    };
+    let mut body = vec![0u8; (end + 1 - start) as usize];
+    if total > 0 {
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+            return text(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
+        if let Err(e) = file.read_exact(&mut body).await {
+            return text(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
+    } else {
+        body.clear();
+    }
+    let b = b.header(header::CONTENT_LENGTH, body.len());
+    if partial {
+        b.status(206).header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}")).body(body).unwrap()
+    } else {
+        b.status(200).body(body).unwrap()
     }
 }
 
 /// Parses `bytes=START-` or `bytes=START-END`.
-fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
+pub(crate) fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
     let (start, end) = v.strip_prefix("bytes=")?.split(',').next()?.split_once('-')?;
     let start = start.trim().parse().ok()?;
     let end = end.trim();
     Some((start, if end.is_empty() { None } else { Some(end.parse().ok()?) }))
 }
 
-fn mime_for(ext: &str) -> &'static str {
+pub(crate) fn mime_for(ext: &str) -> &'static str {
     match ext {
         "webm" | "weba" => "audio/webm",
         "m4a" | "mp4" | "aac" => "audio/mp4",
@@ -299,7 +318,7 @@ fn cache_key(s: &str) -> String {
     Sha256::digest(s.as_bytes()).iter().take(12).map(|b| format!("{b:02x}")).collect()
 }
 
-fn text(status: StatusCode, msg: &str) -> Response<Vec<u8>> {
+pub(crate) fn text(status: StatusCode, msg: &str) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")

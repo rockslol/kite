@@ -1,35 +1,48 @@
 <script>
-  // Small dark right-click menu. `menu` is { x, y, items: [{ label, action }] } or null.
-  let { menu, onclose } = $props();
+  // The one right-click menu, driven by `menu` in ui.svelte.js.
+  import { menu } from "./ui.svelte.js";
+
   let el = $state();
-  let pos = $state({ x: 0, y: 0 });
+  let pos = $state(null);
 
   $effect(() => {
-    if (!menu || !el) return;
+    const m = menu.current;
+    if (!m || !el) {
+      pos = null;
+      return;
+    }
+    // Measure after the items render, then keep the menu on screen.
+    el.style.left = `${m.x}px`;
+    el.style.top = `${m.y}px`;
     const r = el.getBoundingClientRect();
     pos = {
-      x: Math.min(menu.x, innerWidth - r.width - 8),
-      y: Math.min(menu.y, innerHeight - r.height - 8),
+      x: Math.max(8, Math.min(m.x, innerWidth - r.width - 8)),
+      y: Math.max(8, Math.min(m.y, innerHeight - r.height - 8)),
     };
   });
 
   function pick(item) {
-    onclose();
+    if (!item.keepOpen) menu.close();
     item.action();
   }
 </script>
 
 <svelte:window
-  onpointerdown={(e) => menu && !el?.contains(e.target) && onclose()}
-  onkeydown={(e) => menu && e.key === "Escape" && onclose()}
-  onblur={() => menu && onclose()}
-  onresize={() => menu && onclose()}
+  onpointerdown={(e) => menu.current && !el?.contains(e.target) && menu.close()}
+  onkeydown={(e) => menu.current && e.key === "Escape" && menu.close()}
+  onblur={() => menu.close()}
+  onresize={() => menu.close()}
 />
 
-{#if menu}
-  <div class="menu" bind:this={el} style="left:{pos.x || menu.x}px; top:{pos.y || menu.y}px" role="menu">
-    {#each menu.items as item}
-      <button role="menuitem" onclick={() => pick(item)}>{item.label}</button>
+{#if menu.current}
+  <div
+    class="menu"
+    bind:this={el}
+    style={pos ? `left:${pos.x}px; top:${pos.y}px` : "visibility:hidden"}
+    role="menu"
+  >
+    {#each menu.current.items as item}
+      <button role="menuitem" class:danger={item.danger} onclick={() => pick(item)}>{item.label}</button>
     {/each}
   </div>
 {/if}
@@ -38,7 +51,10 @@
   .menu {
     position: fixed;
     z-index: 50;
-    min-width: 170px;
+    min-width: 190px;
+    max-width: 300px;
+    max-height: 70vh;
+    overflow-y: auto;
     padding: 4px;
     background: #141416;
     border: 1px solid var(--border);
@@ -51,8 +67,14 @@
     padding: 7px 10px;
     border-radius: 6px;
     text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   button:hover {
     background: var(--hover);
+  }
+  button.danger {
+    color: var(--error);
   }
 </style>
