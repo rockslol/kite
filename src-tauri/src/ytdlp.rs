@@ -16,8 +16,10 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(90);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const UPDATE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// On Windows Kite uses yt-dlp's unpacked build (a folder): the single-file `yt-dlp.exe`
+/// unpacks itself on every run, which costs ~0.55 s per song, search and import lookup.
 #[cfg(windows)]
-const ASSET: &str = "yt-dlp.exe";
+const ASSET: &str = "yt-dlp_win.zip";
 #[cfg(target_os = "macos")]
 const ASSET: &str = "yt-dlp_macos";
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -97,18 +99,22 @@ pub struct YtDlp {
     js_args: RwLock<Vec<String>>,
     info: RwLock<ToolInfo>,
     status: watch::Sender<ToolStatus>,
+    /// Runs hold it shared; swapping in a new yt-dlp folder holds it exclusively, because
+    /// Windows can't replace files of a running program.
+    in_use: tokio::sync::RwLock<()>,
 }
 
 impl YtDlp {
     pub fn new(bin_dir: &Path, cache_dir: &Path) -> Self {
         let (status, _) = watch::channel(ToolStatus::Checking);
         Self {
-            bin: bin_dir.join(ASSET),
+            bin: if cfg!(windows) { bin_dir.join("yt-dlp").join("yt-dlp.exe") } else { bin_dir.join(ASSET) },
             bin_dir: bin_dir.to_path_buf(),
             cache_dir: cache_dir.join("yt-dlp"),
             js_args: RwLock::new(vec![]),
             info: RwLock::new(ToolInfo::default()),
             status,
+            in_use: tokio::sync::RwLock::new(()),
         }
     }
 
@@ -153,14 +159,28 @@ impl YtDlp {
     }
 
     /// Updates yt-dlp now (Settings button). Returns the new version.
-    pub async fn update_now(&self) -> Result<String, String> {
+    pub async fn update_now(&self, http: &reqwest::Client) -> Result<String, String> {
         self.wait_ready().await?;
-        self.run(&["--update"]).await?;
+        self.update(http).await?;
+        Ok(self.info().ytdlp_version)
+    }
+
+    /// Windows: download the latest unpacked build if it's newer. Elsewhere yt-dlp updates
+    /// itself in place (and verifies its own signature).
+    async fn update(&self, http: &reqwest::Client) -> Result<(), String> {
+        if cfg!(windows) {
+            let latest = latest_version(http).await?;
+            if latest != self.info().ytdlp_version {
+                self.fetch(http).await?;
+            }
+        } else {
+            self.run(&["--update"]).await?;
+        }
         if let Ok(f) = std::fs::File::options().write(true).open(&self.bin) {
             let _ = f.set_modified(SystemTime::now());
         }
         self.read_version().await;
-        Ok(self.info().ytdlp_version)
+        Ok(())
     }
 
     pub fn status(&self) -> ToolStatus {
@@ -185,6 +205,9 @@ impl YtDlp {
         self.pick_js_runtime(&http).await;
         self.set_status(&app, ToolStatus::Ready);
         self.read_version().await;
+        // 0.1.0 used the single-file exe; it's replaced by the folder now.
+        #[cfg(windows)]
+        let _ = std::fs::remove_file(self.bin_dir.join("yt-dlp.exe"));
         if fresh_install {
             return;
         }
@@ -195,12 +218,7 @@ impl YtDlp {
             .and_then(|t| SystemTime::now().duration_since(t).ok())
             .is_some_and(|age| age > UPDATE_EVERY);
         if stale {
-            // yt-dlp updates itself in place and verifies its own signature.
-            let _ = self.run(&["--update"]).await;
-            if let Ok(f) = std::fs::File::options().write(true).open(&self.bin) {
-                let _ = f.set_modified(SystemTime::now());
-            }
-            self.read_version().await;
+            let _ = self.update(&http).await;
         }
     }
 
@@ -237,17 +255,57 @@ impl YtDlp {
             return Err("checksum mismatch".into());
         }
 
-        if let Some(dir) = self.bin.parent() {
-            tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
-        }
-        let part = self.bin.with_extension("part");
-        tokio::fs::write(&part, &bytes).await.map_err(|e| e.to_string())?;
-        #[cfg(unix)]
+        #[cfg(windows)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755));
+            self.install_folder(bytes.to_vec()).await
         }
-        tokio::fs::rename(&part, &self.bin).await.map_err(|e| e.to_string())?;
+        #[cfg(not(windows))]
+        {
+            if let Some(dir) = self.bin.parent() {
+                tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+            }
+            let part = self.bin.with_extension("part");
+            tokio::fs::write(&part, &bytes).await.map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755));
+            }
+            let _swap = self.in_use.write().await;
+            tokio::fs::rename(&part, &self.bin).await.map_err(|e| e.to_string())?;
+            Ok(())
+        }
+    }
+
+    /// Unzips a verified `yt-dlp_win.zip` next to the current folder, then swaps the two while
+    /// no yt-dlp run is active.
+    #[cfg(windows)]
+    async fn install_folder(&self, zip_bytes: Vec<u8>) -> Result<(), String> {
+        let target = self.bin_dir.join("yt-dlp");
+        let fresh = self.bin_dir.join("yt-dlp.new");
+        let old = self.bin_dir.join("yt-dlp.old");
+        let unzip_to = fresh.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let _ = std::fs::remove_dir_all(&unzip_to);
+            std::fs::create_dir_all(&unzip_to).map_err(|e| e.to_string())?;
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).map_err(|e| e.to_string())?;
+            zip.extract(&unzip_to).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        if !fresh.join("yt-dlp.exe").is_file() {
+            return Err("the download didn't contain yt-dlp.exe".into());
+        }
+        let _swap = self.in_use.write().await;
+        let _ = std::fs::remove_dir_all(&old);
+        if target.exists() {
+            std::fs::rename(&target, &old).map_err(|e| e.to_string())?;
+        }
+        if let Err(e) = std::fs::rename(&fresh, &target) {
+            let _ = std::fs::rename(&old, &target);
+            return Err(e.to_string());
+        }
+        let _ = std::fs::remove_dir_all(&old);
         Ok(())
     }
 
@@ -268,6 +326,7 @@ impl YtDlp {
     }
 
     async fn run_for(&self, args: &[&str], limit: Duration) -> Result<Vec<u8>, String> {
+        let _running = self.in_use.read().await;
         let mut cmd = Command::new(&self.bin);
         cmd.args(["--ignore-config", "--no-warnings", "--no-progress", "--cache-dir"])
             .arg(&self.cache_dir)
@@ -438,6 +497,21 @@ fn pick_thumbnail(list: &Value) -> Option<String> {
         .find(|t| t["id"].as_str() == Some("t300x300") || t["url"].as_str().is_some_and(|u| u.contains("t300x300")))
         .and_then(url)
         .or_else(|| list.last().and_then(url))
+}
+
+/// The newest yt-dlp version, from GitHub's "latest release" redirect (no API rate limit).
+async fn latest_version(http: &reqwest::Client) -> Result<String, String> {
+    let resp = http
+        .get("https://github.com/yt-dlp/yt-dlp/releases/latest")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    resp.url()
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .filter(|tag| tag.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(String::from)
+        .ok_or_else(|| "couldn't read the latest yt-dlp version".to_string())
 }
 
 /// Downloads a file and keeps it only if its SHA-256 matches.

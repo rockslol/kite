@@ -29,7 +29,8 @@ class Search {
       if (token !== this.#token) return;
       this.results = found;
       this.searchedFor = q;
-      player.warm(found[0]);
+      // Get the top results ready: most clicks land on one of them.
+      for (const t of found.slice(0, 3)) player.warm(t);
     } catch (e) {
       if (token === this.#token) this.error = String(e);
     } finally {

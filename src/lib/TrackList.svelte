@@ -47,7 +47,7 @@
   function enter(t) {
     if (!onhover) return;
     clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(() => onhover(t), 350);
+    hoverTimer = setTimeout(() => onhover(t), 150);
   }
 </script>
 

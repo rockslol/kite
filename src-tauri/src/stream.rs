@@ -47,7 +47,7 @@ impl Streams {
             http,
             cache_dir: cache_dir.join("audio"),
             slots: Mutex::new(HashMap::new()),
-            resolving: tokio::sync::Semaphore::new(3),
+            resolving: tokio::sync::Semaphore::new(4),
         }
     }
 

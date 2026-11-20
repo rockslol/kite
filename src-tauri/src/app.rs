@@ -163,7 +163,7 @@ pub fn tools_info(state: State<'_, AppState>) -> crate::ytdlp::ToolInfo {
 
 #[tauri::command]
 pub async fn tools_update(state: State<'_, AppState>) -> Result<String, String> {
-    state.yt.update_now().await
+    state.yt.update_now(&state.http).await
 }
 
 // ---- cache ------------------------------------------------------------------------

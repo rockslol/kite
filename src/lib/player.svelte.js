@@ -3,10 +3,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { streamUrl } from "./urls.js";
+import { toasts } from "./ui.svelte.js";
 
 const SAVE_KEY = "kite.session";
 const POS_KEY = "kite.position";
 const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
+/** Start loading the next song this many seconds before the current one ends. */
+const PRELOAD_BEFORE_END = 25;
 
 let seq = 0;
 const newKey = () => `${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -40,7 +43,11 @@ class Player {
   current = $derived(this.queue[this.index]);
   upcoming = $derived(this.queue.slice(this.index + 1));
 
+  // Two players: the active one, and a standby that loads the next song near the end of
+  // this one, so the switch has no gap (and "next" is instant).
   #audio = new Audio();
+  #standby = new Audio();
+  #standbyKey = null;
   #token = 0;
   #dragging = false;
   #resumeAt = 0;
@@ -49,13 +56,16 @@ class Player {
 
   constructor() {
     this.#audio.preload = "auto";
+    this.#standby.preload = "auto";
     this.#restore();
-    this.#wireAudio();
+    this.#wireAudio(this.#audio);
+    this.#wireAudio(this.#standby);
     this.#wireMediaControls();
 
     $effect.root(() => {
       $effect(() => {
         this.#audio.volume = this.volume;
+        this.#standby.volume = this.volume;
       });
       $effect(() => this.#save());
     });
@@ -181,6 +191,8 @@ class Player {
     if (auto && this.repeat === "one") {
       this.#audio.currentTime = 0;
       this.#audio.play();
+    } else if (this.#standbyReady()) {
+      this.#swapToStandby();
     } else if (this.index + 1 < this.queue.length) {
       this.#playAt(this.index + 1);
     } else if (this.repeat === "all" && this.queue.length) {
@@ -219,6 +231,7 @@ class Player {
   async #playAt(i, startAt = 0) {
     const track = this.queue[i];
     if (!track) return;
+    this.#clearStandby();
     this.index = i;
     const token = ++this.#token;
     const audio = this.#audio;
@@ -236,10 +249,7 @@ class Player {
     try {
       if (track.source !== "local") await invoke("prepare", { url: track.url });
     } catch (e) {
-      if (token === this.#token) {
-        this.loading = false;
-        this.error = String(e);
-      }
+      if (token === this.#token) this.#failed(String(e));
       return;
     }
     if (token !== this.#token) return;
@@ -247,17 +257,80 @@ class Player {
     audio.src = streamUrl(track);
     if (startAt > 0) audio.currentTime = startAt;
     audio.play().catch((e) => {
-      if (e.name !== "AbortError" && token === this.#token) {
-        this.loading = false;
-        this.error = "This song couldn't be played.";
-      }
+      if (e.name !== "AbortError" && token === this.#token) this.#failed();
     });
 
     this.warm(this.queue[i + 1]);
   }
 
+  /** A song can't play: say so, and move on to the next one. */
+  #failed(reason = "This song couldn't be played.") {
+    const token = this.#token;
+    const track = this.current;
+    this.loading = false;
+    this.playing = false;
+    this.error = reason;
+    if (this.index + 1 >= this.queue.length) return;
+    toasts.show(`Couldn't play ${track?.title ?? "this song"}, skipping`);
+    setTimeout(() => {
+      if (token === this.#token && this.error) this.#playAt(this.index + 1);
+    }, 1500);
+  }
+
+  #standbyReady() {
+    const next = this.queue[this.index + 1];
+    return !!next && this.#standbyKey === next.key && !!this.#standby.getAttribute("src");
+  }
+
+  #clearStandby() {
+    this.#standbyKey = null;
+    this.#standby.pause();
+    this.#standby.removeAttribute("src");
+    this.#standby.load();
+  }
+
+  /** Near the end of a song: load the next one in the standby player. */
+  async #preloadNext() {
+    const next = this.queue[this.index + 1];
+    if (!next || this.repeat === "one") return;
+    this.#standbyKey = next.key;
+    try {
+      if (next.source !== "local") await invoke("prepare", { url: next.url });
+    } catch {
+      this.#standbyKey = null;
+      return;
+    }
+    if (this.#standbyKey !== next.key) return;
+    this.#standby.src = streamUrl(next);
+    this.#standby.load();
+  }
+
+  /** The song ended (or "next" was pressed) and the next one is already loaded: switch now. */
+  #swapToStandby() {
+    const old = this.#audio;
+    this.#audio = this.#standby;
+    this.#standby = old;
+    this.#standbyKey = null;
+    old.pause();
+    old.removeAttribute("src");
+    old.load();
+    const token = ++this.#token;
+    this.index += 1;
+    this.error = "";
+    this.time = 0;
+    this.duration = this.current?.duration || 0;
+    this.#counted = false;
+    this.#sendTrack(this.current);
+    this.#audio.currentTime = 0;
+    this.#audio.play().catch((e) => {
+      if (e.name !== "AbortError" && token === this.#token) this.#failed();
+    });
+    this.warm(this.queue[this.index + 1]);
+  }
+
   #stop() {
     this.#token++;
+    this.#clearStandby();
     this.#audio.pause();
     this.#audio.removeAttribute("src");
     this.index = this.queue.length ? Math.min(this.index, this.queue.length - 1) : -1;
@@ -267,24 +340,35 @@ class Player {
     this.#media("stopped");
   }
 
-  #wireAudio() {
-    const a = this.#audio;
+  /** Events from both players; the standby one is ignored until it becomes active. */
+  #wireAudio(a) {
+    const active = () => a === this.#audio;
     a.addEventListener("playing", () => {
+      if (!active()) return;
       this.playing = true;
       this.loading = false;
       this.#media("playing");
     });
     a.addEventListener("pause", () => {
+      if (!active()) return;
       this.playing = false;
       this.#media("paused");
       this.#savePosition();
     });
-    a.addEventListener("waiting", () => (this.loading = true));
-    a.addEventListener("canplay", () => (this.loading = false));
-    a.addEventListener("seeked", () => this.#media(a.paused ? "paused" : "playing"));
+    a.addEventListener("waiting", () => active() && (this.loading = true));
+    a.addEventListener("canplay", () => active() && (this.loading = false));
+    a.addEventListener("seeked", () => active() && this.#media(a.paused ? "paused" : "playing"));
     let lastSave = 0;
     a.addEventListener("timeupdate", () => {
+      if (!active()) return;
       if (!this.#dragging) this.time = a.currentTime;
+      // Close to the end: get the next song ready in the standby player (again, if the queue
+      // changed since).
+      const left = a.duration - a.currentTime;
+      const next = this.queue[this.index + 1];
+      if (next && Number.isFinite(left) && left < PRELOAD_BEFORE_END && this.#standbyKey !== next.key) {
+        this.#preloadNext();
+      }
       // Counts as a play after 30 s, or halfway through shorter songs.
       if (!this.#counted && this.current && a.currentTime >= Math.min(30, (a.duration || 60) / 2)) {
         this.#counted = true;
@@ -299,17 +383,18 @@ class Player {
       }
     });
     a.addEventListener("durationchange", () => {
+      if (!active()) return;
       if (Number.isFinite(a.duration) && a.duration > 0) {
         this.duration = a.duration;
         if (this.current) this.#sendTrack(this.current, a.duration);
       }
     });
-    a.addEventListener("ended", () => this.next(true));
+    a.addEventListener("ended", () => active() && this.next(true));
     a.addEventListener("error", () => {
-      if (!a.getAttribute("src") || !this.current) return;
-      this.loading = false;
-      this.playing = false;
-      this.error = "This song couldn't be played.";
+      if (!a.getAttribute("src")) return;
+      // A standby that failed to load: forget it, the normal path will try again.
+      if (!active()) return void (this.#standbyKey = null);
+      if (this.current) this.#failed();
     });
   }
 
