@@ -1,0 +1,26 @@
+[package]
+name = "hum"
+version = "0.1.0"
+description = "A lightweight music player for YouTube, SoundCloud and local files"
+edition = "2021"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "sync", "fs", "io-util", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+percent-encoding = "2"
+sha2 = "0.10"
+souvlaki = "0.9.3"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
+panic = "abort"
