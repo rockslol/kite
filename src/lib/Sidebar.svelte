@@ -169,7 +169,7 @@
   }
   .item.on {
     color: var(--text);
-    background: var(--active);
+    background: var(--accent-soft);
   }
   .item.drop {
     color: var(--text);

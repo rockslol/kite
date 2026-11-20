@@ -9,6 +9,14 @@
   --faint: #55555a;
   --error: #ff6b6b;
   --radius: 14px;
+  /* Kite's look: a deep purple backdrop (see body), with crisp white controls on top. */
+  --accent: #fff;
+  --accent-2: #fff;
+  --accent-text: #fff;
+  --grad: #fff;
+  --on-accent: #000;
+  --accent-soft: rgba(255, 255, 255, 0.1);
+  --accent-softer: rgba(255, 255, 255, 0.07);
   color-scheme: dark;
 }
 
@@ -20,7 +28,11 @@ html,
 body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  /* Deep purple from the top left, fading to black, with a little in the bottom right. */
+  background:
+    radial-gradient(1500px 1000px at 0% 0%, #2a1250 0%, rgba(42, 18, 80, 0.45) 38%, transparent 72%),
+    radial-gradient(1200px 900px at 100% 100%, #160a2c 0%, transparent 62%),
+    var(--bg);
   color: var(--text);
   font: 14px/1.4 Inter, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -98,12 +110,13 @@ input {
   background: var(--hover);
 }
 .btn.primary {
-  background: var(--text);
-  border-color: var(--text);
-  color: #000;
+  background: var(--grad);
+  border-color: transparent;
+  color: var(--on-accent);
 }
-.btn.primary:hover {
-  background: #e6e6e6;
+.btn.primary:hover:not(:disabled) {
+  background: var(--grad);
+  filter: brightness(0.9);
 }
 .btn.text {
   border-color: transparent;
@@ -149,6 +162,6 @@ input {
   color: var(--text);
 }
 .segmented button.on {
-  background: var(--active);
+  background: var(--accent-soft);
   color: var(--text);
 }

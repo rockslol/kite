@@ -171,7 +171,7 @@
     background: var(--hover);
   }
   .item.current {
-    background: var(--active);
+    background: var(--accent-soft);
   }
   .art {
     width: 36px;

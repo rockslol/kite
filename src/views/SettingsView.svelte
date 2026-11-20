@@ -233,10 +233,10 @@
     transition: transform 0.15s;
   }
   .switch.on {
-    background: #fff;
+    background: var(--grad);
   }
   .switch.on span {
-    background: #000;
+    background: var(--on-accent);
     transform: translateX(16px);
   }
 </style>

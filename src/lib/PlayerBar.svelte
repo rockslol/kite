@@ -120,7 +120,7 @@
     align-items: center;
     padding: 12px 20px;
     border-top: 1px solid var(--border);
-    background: var(--bg);
+    background: rgba(6, 3, 12, 0.55);
   }
   .player.idle .title {
     color: var(--muted);
@@ -178,6 +178,9 @@
     stroke: currentColor;
     stroke-width: 1.8;
     stroke-linejoin: round;
+  }
+  .icon.small.heart.on {
+    color: var(--accent-text);
   }
   .heart.on svg {
     fill: currentColor !important;
@@ -251,11 +254,12 @@
   .icon.play {
     width: 36px;
     height: 36px;
-    background: var(--text);
-    color: #000;
+    background: var(--grad);
+    color: var(--on-accent);
   }
   .icon.play:hover {
-    background: #e6e6e6;
+    background: var(--grad);
+    filter: brightness(0.9);
   }
   .seek {
     display: grid;
@@ -292,7 +296,8 @@
   input[type="range"]::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: 2px;
-    background: linear-gradient(to right, var(--text) var(--p, 0%), rgba(255, 255, 255, 0.16) var(--p, 0%));
+    background: linear-gradient(90deg, var(--accent), var(--accent-2)) left / var(--p, 0%) 100% no-repeat,
+      rgba(255, 255, 255, 0.16);
   }
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -320,7 +325,7 @@
   }
   .spinner.dark {
     border: 2px solid rgba(0, 0, 0, 0.2);
-    border-top-color: #000;
+    border-top-color: var(--on-accent);
   }
   @keyframes spin {
     to {

@@ -138,7 +138,7 @@
     background: var(--hover);
   }
   .row.current {
-    background: var(--active);
+    background: var(--accent-softer);
   }
   .num {
     text-align: center;
@@ -205,7 +205,7 @@
     stroke-linejoin: round;
   }
   .heart.on {
-    color: var(--text);
+    color: var(--accent-text);
   }
   .heart.on svg {
     fill: currentColor;
@@ -237,7 +237,7 @@
   .bars i {
     width: 3px;
     height: 12px;
-    background: var(--text);
+    background: var(--grad);
     border-radius: 1px;
     transform-origin: bottom;
     will-change: transform;
