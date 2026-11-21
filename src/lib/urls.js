@@ -38,6 +38,19 @@ export function fmtTotal(tracks) {
   return h ? `${h} h ${m} min` : `${m} min`;
 }
 
+/** Lower case without accents, so "ujra" finds "újra". */
+const fold = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
+/** Songs whose title, artist or album contain every word of `query`. */
+export function filterTracks(tracks, query) {
+  const words = fold(query).split(/\s+/).filter(Boolean);
+  if (!words.length) return tracks;
+  return tracks.filter((t) => {
+    const hay = fold(`${t.title} ${t.artist} ${t.album ?? ""}`);
+    return words.every((w) => hay.includes(w));
+  });
+}
+
 export function plural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }

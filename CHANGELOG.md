@@ -14,6 +14,10 @@ What changed in each version of Kite. The newest version is at the top.
 - **Follow artists** from their page. Kite checks for new releases every few hours and tells you when one comes out.
 - Chart playlists open like albums: play, shuffle or save them.
 - Library backups now include the artists you follow.
+- **Search suggestions** while you type, with the top matching artist, album or song on the YouTube Music tab. Use the arrow keys and Enter to pick one. With the field empty, it shows your recent searches.
+- **Find in a playlist** or in Liked songs: a search field above long lists. Accents don't matter, so "ujra" finds "újra".
+- **Because you liked …** on Home: songs like one you liked (or, before you like anything, one you play a lot), a different one each day.
+- **Song info** (right-click a song): length, when it came out, YouTube views, how often you played it, when you liked it, and the playlists it's in. Open it on YouTube or copy the link.
 
 ## 0.4.1 (2026-11-23)
 

@@ -570,6 +570,42 @@ pub struct PlaylistInfo {
     source_url: Option<String>,
 }
 
+/// What the library knows about one song, for the song info window.
+#[derive(Serialize, Default)]
+pub struct TrackStats {
+    plays: i64,
+    first_played: Option<i64>,
+    last_played: Option<i64>,
+    liked_at: Option<i64>,
+    added_at: Option<i64>,
+    /// Local files only.
+    path: Option<String>,
+    playlists: Vec<String>,
+}
+
+#[tauri::command]
+pub fn lib_track_stats(lib: Lib<'_>, url: String) -> Result<TrackStats, String> {
+    lib.with(|c| {
+        let (plays, first_played, last_played) =
+            c.query_row("SELECT COUNT(*), MIN(played_at), MAX(played_at) FROM plays WHERE url = ?1", [&url], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?;
+        let liked_at = c.query_row("SELECT liked_at FROM likes WHERE url = ?1", [&url], |r| r.get(0)).optional()?;
+        let (added_at, path) = c
+            .query_row("SELECT added_at, path FROM tracks WHERE url = ?1", [&url], |r| Ok((Some(r.get(0)?), r.get(1)?)))
+            .optional()?
+            .unwrap_or((None, None));
+        let playlists = c
+            .prepare(
+                "SELECT DISTINCT p.name FROM playlist_items i JOIN playlists p ON p.id = i.playlist_id
+                 WHERE i.url = ?1 ORDER BY p.name COLLATE NOCASE",
+            )?
+            .query_map([&url], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(TrackStats { plays, first_played, last_played, liked_at, added_at, path, playlists })
+    })
+}
+
 #[derive(Serialize)]
 pub struct PlaylistItem {
     item_id: i64,

@@ -70,6 +70,20 @@ class Toasts {
   }
 }
 
+/** The song shown in the Song info window, or null. */
+class SongInfo {
+  track = $state(null);
+
+  open(track) {
+    this.track = track;
+  }
+
+  close() {
+    this.track = null;
+  }
+}
+
 export const nav = new Nav();
+export const songInfo = new SongInfo();
 export const menu = new Menu();
 export const toasts = new Toasts();

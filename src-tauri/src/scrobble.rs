@@ -318,7 +318,7 @@ pub async fn scrobble(state: State<'_, AppState>, s: State<'_, Scrobbler>, track
     Ok(())
 }
 
-fn open_browser(url: &str) {
+pub fn open_browser(url: &str) {
     #[cfg(windows)]
     let _ = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
     #[cfg(target_os = "macos")]

@@ -4,9 +4,11 @@
   import TrackList from "../lib/TrackList.svelte";
   import { library } from "../lib/library.svelte.js";
   import { player } from "../lib/player.svelte.js";
-  import { fmtTotal, plural } from "../lib/urls.js";
+  import { filterTracks, fmtTotal, plural } from "../lib/urls.js";
 
   let tracks = $state([]);
+  let filter = $state("");
+  let shown = $derived(filterTracks(tracks, filter));
   let loaded = $state(false);
 
   let warmed = null; // the list handed to warmList, to stop it when this page closes
@@ -37,8 +39,14 @@
     {/if}
   </header>
 
-  {#if tracks.length}
-    <TrackList {tracks} />
+  {#if tracks.length > 12}
+    <input class="filter" type="text" placeholder="Find in liked songs" bind:value={filter} spellcheck="false" />
+  {/if}
+
+  {#if shown.length}
+    <TrackList tracks={shown} />
+  {:else if tracks.length}
+    <p class="empty">No liked songs match "{filter}".</p>
   {:else if loaded}
     <p class="empty">Songs you like show up here. Use the heart next to any song.</p>
   {/if}

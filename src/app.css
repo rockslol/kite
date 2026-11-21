@@ -135,6 +135,24 @@ input {
   font-weight: 600;
   color: var(--muted);
 }
+/* "Find in …" fields above song lists */
+.filter {
+  width: 280px;
+  height: 34px;
+  margin: 0 8px 10px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: none;
+  user-select: text;
+}
+.filter:focus {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.filter::placeholder {
+  color: var(--faint);
+}
 .empty {
   margin: 18vh auto 0;
   max-width: 420px;

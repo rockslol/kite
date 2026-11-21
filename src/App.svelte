@@ -7,6 +7,8 @@
   import { library } from "./lib/library.svelte.js";
   import { nav, toasts } from "./lib/ui.svelte.js";
   import Sidebar from "./lib/Sidebar.svelte";
+  import SearchBox from "./lib/SearchBox.svelte";
+  import SongInfo from "./lib/SongInfo.svelte";
   import PlayerBar from "./lib/PlayerBar.svelte";
   import QueuePanel from "./lib/QueuePanel.svelte";
   import LyricsPanel from "./lib/LyricsPanel.svelte";
@@ -36,7 +38,7 @@
   // The right-hand panel: "queue", "lyrics" or "" (closed).
   let panel = $state(localStorage.getItem("kite.panel") ?? (localStorage.getItem("showQueue") === "1" ? "queue" : ""));
   const togglePanel = (name) => (panel = panel === name ? "" : name);
-  let searchInput;
+  let searchBox;
 
   $effect(() => {
     localStorage.setItem("kite.panel", panel);
@@ -69,12 +71,6 @@
     };
   });
 
-  function submit(e) {
-    e.preventDefault();
-    nav.go({ name: "search" });
-    search.run();
-  }
-
   function playPause() {
     if (!player.current && search.results.length) player.playList(search.results, 0);
     else player.toggle();
@@ -84,8 +80,7 @@
     const typing = e.target instanceof HTMLInputElement && e.target.type === "text";
     if ((e.ctrlKey && e.key === "f") || (!typing && e.key === "/")) {
       e.preventDefault();
-      searchInput?.focus();
-      searchInput?.select();
+      searchBox?.focus();
     } else if (e.altKey && e.key === "ArrowLeft") {
       e.preventDefault();
       nav.back();
@@ -126,21 +121,7 @@
       </button>
       Kite
     </div>
-    <form class="search" onsubmit={submit}>
-      <svg viewBox="0 0 24 24" class="glass" aria-hidden="true">
-        <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4 4" />
-      </svg>
-      <input
-        bind:this={searchInput}
-        bind:value={search.query}
-        type="text"
-        placeholder="Search songs, or paste a link"
-        spellcheck="false"
-        autocomplete="off"
-        onfocus={() => nav.go({ name: "search" })}
-      />
-      {#if search.searching}<span class="spinner"></span>{/if}
-    </form>
+    <SearchBox bind:this={searchBox} />
     <div class="segmented" role="tablist">
       {#each SOURCES as s}
         <button role="tab" aria-selected={search.source === s.id} class:on={search.source === s.id} onclick={() => (nav.go({ name: "search" }), search.pickSource(s.id))}>
@@ -192,6 +173,7 @@
 </div>
 
 <ContextMenu />
+<SongInfo />
 <ImportDialog />
 
 {#if importer.jobs.length}
@@ -270,43 +252,6 @@
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
-  }
-  .search {
-    position: relative;
-    flex: 1;
-    max-width: 520px;
-  }
-  .search input {
-    width: 100%;
-    height: 38px;
-    padding: 0 36px 0 38px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    outline: none;
-    user-select: text;
-  }
-  .search input:focus {
-    border-color: rgba(255, 255, 255, 0.22);
-  }
-  .search input::placeholder {
-    color: var(--faint);
-  }
-  .glass {
-    position: absolute;
-    left: 12px;
-    top: 10px;
-    width: 18px;
-    height: 18px;
-    fill: none;
-    stroke: var(--muted);
-    stroke-width: 1.8;
-    stroke-linecap: round;
-  }
-  .search .spinner {
-    position: absolute;
-    right: 12px;
-    top: 11px;
   }
   .notice {
     margin: 0 20px 8px;

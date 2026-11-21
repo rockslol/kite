@@ -12,12 +12,30 @@ class Search {
   searching = $state(false);
   error = $state("");
   searchedFor = $state("");
+  /** The last searches, newest first (shown when the search field is empty). */
+  recent = $state(JSON.parse(localStorage.getItem("kite.recentSearches") || "[]"));
   #token = 0;
+
+  #remember(q) {
+    this.recent = [q, ...this.recent.filter((r) => r.toLowerCase() !== q.toLowerCase())].slice(0, 8);
+    localStorage.setItem("kite.recentSearches", JSON.stringify(this.recent));
+  }
+
+  removeRecent(q) {
+    this.recent = this.recent.filter((r) => r !== q);
+    localStorage.setItem("kite.recentSearches", JSON.stringify(this.recent));
+  }
+
+  clearRecent() {
+    this.recent = [];
+    localStorage.removeItem("kite.recentSearches");
+  }
 
   async run() {
     const q = this.query.trim();
     if (!q) return;
     if (isMusicLink(q)) return this.#openLink(q);
+    this.#remember(q);
     const token = ++this.#token;
     this.searching = true;
     this.error = "";

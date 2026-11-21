@@ -6,11 +6,13 @@
   import { player } from "../lib/player.svelte.js";
   import { nav, menu } from "../lib/ui.svelte.js";
   import { importer } from "../lib/importer.svelte.js";
-  import { artSrc, fmtTime, fmtTotal, plural } from "../lib/urls.js";
+  import { artSrc, filterTracks, fmtTime, fmtTotal, plural } from "../lib/urls.js";
 
   let { id } = $props();
 
   let items = $state([]);
+  let filter = $state("");
+  let shown = $derived(filterTracks(items, filter));
   let loaded = $state(false);
   let editing = $state(false);
   let draft = $state("");
@@ -172,10 +174,14 @@
     </div>
   {/if}
 
-  {#if items.length}
+  {#if items.length > 12}
+    <input class="filter" type="text" placeholder="Find in playlist" bind:value={filter} spellcheck="false" />
+  {/if}
+
+  {#if shown.length}
     <TrackList
-      tracks={items}
-      onmove={move}
+      tracks={shown}
+      onmove={filter.trim() ? null : move /* drag to reorder only on the whole list */}
       extraMenu={(chosen) =>
         chosen.length === 1
           ? [
@@ -184,6 +190,8 @@
             ]
           : [{ label: `Remove ${chosen.length} from this playlist`, action: () => remove(chosen) }]}
     />
+  {:else if items.length}
+    <p class="empty">No songs in this playlist match "{filter}".</p>
   {:else if loaded}
     <p class="empty">This playlist is empty. Right-click any song and pick "Add to playlist", or drag songs onto it in the sidebar.</p>
   {/if}

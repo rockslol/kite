@@ -122,6 +122,17 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Opens a web page in the default browser. Only http(s) links, so a song's data can never
+/// start a program.
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) || url.contains(char::is_whitespace) {
+        return Err("Kite only opens web links.".into());
+    }
+    crate::scrobble::open_browser(&url);
+    Ok(())
+}
+
 /// The tray tooltip follows the current song.
 #[tauri::command]
 pub fn tray_tooltip(app: AppHandle, text: String) {

@@ -3,7 +3,7 @@
   import TrackList from "../lib/TrackList.svelte";
   import { library } from "../lib/library.svelte.js";
   import { player } from "../lib/player.svelte.js";
-  import { plural } from "../lib/urls.js";
+  import { filterTracks, plural } from "../lib/urls.js";
 
   let tracks = $state([]);
   let loaded = $state(false);
@@ -17,11 +17,7 @@
     });
   });
 
-  let shown = $derived.by(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return tracks;
-    return tracks.filter((t) => `${t.title} ${t.artist} ${t.album ?? ""}`.toLowerCase().includes(q));
-  });
+  let shown = $derived(filterTracks(tracks, filter));
 
   let scanning = $derived(library.scan.state === "started" || library.scan.state === "progress");
 </script>
@@ -122,19 +118,5 @@
     stroke: currentColor;
     stroke-width: 2;
     stroke-linecap: round;
-  }
-  .filter {
-    width: 280px;
-    height: 34px;
-    margin: 0 8px 10px;
-    padding: 0 12px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    outline: none;
-    user-select: text;
-  }
-  .filter:focus {
-    border-color: rgba(255, 255, 255, 0.22);
   }
 </style>

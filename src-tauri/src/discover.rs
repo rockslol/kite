@@ -63,7 +63,8 @@ struct Fallback<'a> {
 fn parse_row(r: &Value, fb: &Fallback) -> Option<Track> {
     let id = r["playlistItemData"]["videoId"]
         .as_str()
-        .or_else(|| r["overlay"]["musicItemThumbnailOverlayRenderer"]["content"]["musicPlayButtonRenderer"]["playNavigationEndpoint"]["watchEndpoint"]["videoId"].as_str())?
+        .or_else(|| r["overlay"]["musicItemThumbnailOverlayRenderer"]["content"]["musicPlayButtonRenderer"]["playNavigationEndpoint"]["watchEndpoint"]["videoId"].as_str())
+        .or_else(|| r["navigationEndpoint"]["watchEndpoint"]["videoId"].as_str())?
         .to_string();
     let cols = r["flexColumns"].as_array()?;
     let col = |i: usize| cols.get(i).map(|c| &c["musicResponsiveListItemFlexColumnRenderer"]["text"]);
@@ -454,6 +455,133 @@ pub async fn ytm_radio(state: State<'_, AppState>, video_id: Option<String>, pla
     Ok(parse_radio(&call(&state.http, "next", body).await?))
 }
 
+// ---- search suggestions ------------------------------------------------------------------
+
+#[derive(Serialize, Default, Debug)]
+pub struct Suggestions {
+    /// Finished queries for what's typed so far.
+    queries: Vec<String>,
+    /// Artists and albums that match.
+    cards: Vec<Card>,
+    songs: Vec<Track>,
+}
+
+pub fn parse_suggestions(v: &Value) -> Suggestions {
+    let mut out = Suggestions::default();
+    for sec in v["contents"].as_array().into_iter().flatten() {
+        for item in sec["searchSuggestionsSectionRenderer"]["contents"].as_array().into_iter().flatten() {
+            if let Some(s) = item.get("searchSuggestionRenderer") {
+                out.queries.push(text(&s["suggestion"]));
+                continue;
+            }
+            let r = &item["musicResponsiveListItemRenderer"];
+            if r.is_null() {
+                continue;
+            }
+            match browse_id(r) {
+                Some(id) if id.starts_with("UC") || id.starts_with("MPREb") => {
+                    let col = |n: usize| text(&r["flexColumns"][n]["musicResponsiveListItemFlexColumnRenderer"]["text"]);
+                    out.cards.push(Card { id, title: col(0), subtitle: col(1), artwork: row_thumb(r, 120) });
+                }
+                Some(_) => {}
+                None => out.songs.extend(parse_row(r, &Fallback::default())),
+            }
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn ytm_suggestions(state: State<'_, AppState>, query: String) -> Result<Suggestions, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Suggestions::default());
+    }
+    Ok(parse_suggestions(&call(&state.http, "music/get_search_suggestions", json!({ "input": q })).await?))
+}
+
+// ---- related songs ("Because you liked") --------------------------------------------------
+
+#[derive(Serialize, Default, Debug)]
+pub struct Related {
+    songs: Vec<Track>,
+    artists: Vec<Card>,
+}
+
+/// The "Related" tab of a song's watch page: a `MPTRt_…` page to browse.
+fn related_tab(v: &Value) -> Option<String> {
+    let tabs = &v["contents"]["singleColumnMusicWatchNextResultsRenderer"]["tabbedRenderer"]["watchNextTabbedResultsRenderer"]["tabs"];
+    tabs.as_array()?.iter().find_map(|t| {
+        t["tabRenderer"]["endpoint"]["browseEndpoint"]["browseId"].as_str().filter(|b| b.starts_with("MPTRt")).map(String::from)
+    })
+}
+
+pub fn parse_related(v: &Value) -> Related {
+    let mut out = Related::default();
+    for s in v["contents"]["sectionListRenderer"]["contents"].as_array().into_iter().flatten() {
+        let c = &s["musicCarouselShelfRenderer"];
+        let items = c["contents"].as_array().into_iter().flatten();
+        let title = text(&c["header"]["musicCarouselShelfBasicHeaderRenderer"]["title"]).to_lowercase();
+        if title.contains("might also like") {
+            out.songs = items.filter_map(|i| parse_row(&i["musicResponsiveListItemRenderer"], &Fallback::default())).collect();
+        } else if title.contains("similar artists") {
+            out.artists = items.filter_map(card).filter(|c| c.id.starts_with("UC")).collect();
+        }
+    }
+    out
+}
+
+/// Songs like this one (YouTube Music's "You might also like"), and similar artists.
+#[tauri::command]
+pub async fn ytm_related(state: State<'_, AppState>, video_id: String) -> Result<Related, String> {
+    let next = call(&state.http, "next", json!({ "videoId": video_id, "isAudioOnly": true })).await?;
+    let tab = related_tab(&next).ok_or("YouTube Music has no related songs for this one.")?;
+    Ok(parse_related(&call(&state.http, "browse", json!({ "browseId": tab })).await?))
+}
+
+// ---- song info ----------------------------------------------------------------------------
+
+#[derive(Serialize, Default, Debug)]
+pub struct SongInfo {
+    views: Option<u64>,
+    /// "2025-05-15".
+    published: Option<String>,
+    /// "Song" (from an album), "Music video", "Video" (anyone's upload) or "".
+    kind: String,
+    channel: Option<String>,
+    channel_id: Option<String>,
+}
+
+pub fn parse_player(v: &Value) -> SongInfo {
+    let d = &v["videoDetails"];
+    let mf = &v["microformat"]["microformatDataRenderer"];
+    SongInfo {
+        views: d["viewCount"].as_str().and_then(|n| n.parse().ok()),
+        published: mf["uploadDate"].as_str().or(mf["publishDate"].as_str()).map(|s| s.chars().take(10).collect()),
+        kind: match d["musicVideoType"].as_str().unwrap_or("") {
+            "MUSIC_VIDEO_TYPE_ATV" => "Song",
+            "MUSIC_VIDEO_TYPE_OMV" | "MUSIC_VIDEO_TYPE_OFFICIAL_SOURCE_MUSIC" => "Music video",
+            "MUSIC_VIDEO_TYPE_UGC" => "Video",
+            _ => "",
+        }
+        .into(),
+        channel: d["author"].as_str().map(String::from),
+        channel_id: d["channelId"].as_str().map(String::from),
+    }
+}
+
+/// Views, upload date and kind of a YouTube video. Only the details: Kite never streams
+/// from this answer (yt-dlp does that).
+#[tauri::command]
+pub async fn ytm_song_info(state: State<'_, AppState>, video_id: String) -> Result<SongInfo, String> {
+    let v = call(&state.http, "player", json!({ "videoId": video_id })).await?;
+    let info = parse_player(&v);
+    if info.views.is_none() && info.channel.is_none() {
+        return Err("YouTube didn't share details for this one.".into());
+    }
+    Ok(info)
+}
+
 // ---- finding pages by name (for songs that came without ids) ------------------------------
 
 async fn search_rows(http: &reqwest::Client, query: &str, filter: &str) -> Result<Vec<Value>, String> {
@@ -512,6 +640,29 @@ mod tests {
         assert_eq!(country_code("EidleHBsb3JlX2NoYXJ0c19jb3VudHJ5X21lbnVfMzE2NzY2NTY3SFUgkQEoAQ%3D%3D").as_deref(), Some("HU"));
         assert_eq!(country_code("EidleHBsb3JlX2NoYXJ0c19jb3VudHJ5X21lbnVfMzE2NzY2NTY3WlogkQEoAQ%3D%3D").as_deref(), Some("ZZ"));
         assert_eq!(country_code("bm90aGluZw"), None);
+    }
+
+    /// Parses saved suggestion, related and player answers: `KITE_YTM_CHARTS=<dir> cargo test -- --ignored`
+    /// with sugg.json, next.json, related.json and player.json in that folder.
+    #[test]
+    #[ignore]
+    fn parses_saved_song_pages() {
+        let dir = std::path::PathBuf::from(std::env::var("KITE_YTM_CHARTS").expect("KITE_YTM_CHARTS"));
+        let read = |f: &str| -> Value { serde_json::from_str(&std::fs::read_to_string(dir.join(f)).unwrap()).unwrap() };
+        let s = parse_suggestions(&read("sugg.json"));
+        println!("suggestions: {:?} | cards {:?} | songs {:?}", s.queries, s.cards.iter().map(|c| (&c.title, &c.subtitle)).collect::<Vec<_>>(), s.songs.iter().map(|t| (&t.title, &t.artist, &t.artist_id, &t.album)).collect::<Vec<_>>());
+        assert!(!s.queries.is_empty());
+        println!("related tab: {:?}", related_tab(&read("next.json")));
+        assert!(related_tab(&read("next.json")).is_some());
+        let r = parse_related(&read("related.json"));
+        println!("related: {} songs, {} artists | {:?}", r.songs.len(), r.artists.len(), r.songs.iter().take(3).map(|t| (&t.title, &t.artist, &t.album, t.duration, t.artwork.is_some())).collect::<Vec<_>>());
+        assert!(r.songs.len() >= 10 && !r.artists.is_empty());
+        let p = parse_player(&read("player.json"));
+        println!("player: {p:?}");
+        assert!(p.views.is_some() && p.published.is_some());
+        std::fs::write(dir.join("parsed-related.json"), serde_json::to_string(&r).unwrap()).unwrap();
+        std::fs::write(dir.join("parsed-sugg.json"), serde_json::to_string(&s).unwrap()).unwrap();
+        std::fs::write(dir.join("parsed-player.json"), serde_json::to_string(&p).unwrap()).unwrap();
     }
 
     /// Parses saved chart pages: `KITE_YTM_CHARTS=<dir> cargo test -- --ignored` with charts.json

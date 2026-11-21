@@ -2,7 +2,7 @@
 
 import { player } from "./player.svelte.js";
 import { library } from "./library.svelte.js";
-import { menu, nav } from "./ui.svelte.js";
+import { menu, nav, songInfo } from "./ui.svelte.js";
 import { hasPages, openArtist, openAlbum } from "./discover.js";
 
 /**
@@ -21,6 +21,7 @@ export function songMenu(e, list, index, extra = []) {
     ...(t.source === "youtube" ? [{ label: "Start radio", action: () => player.startRadio({ track: t, title: t.title }) }] : []),
     ...(hasPages(t) ? [{ label: "Go to artist", action: () => openArtist(t) }] : []),
     ...(hasPages(t) && t.album ? [{ label: "Go to album", action: () => openAlbum(t) }] : []),
+    { label: "Song info", action: () => songInfo.open(t) },
     ...extra,
   ]);
 }

@@ -2,6 +2,8 @@
   // Charts change once a day: keep them between visits for an hour. Country code → { at, charts, songs }.
   const chartCache = new Map();
   const CHART_TTL = 3600e3;
+  // Related songs per liked song (its url), for "Because you liked".
+  const relatedCache = new Map();
 </script>
 
 <script>
@@ -24,6 +26,8 @@
   let recent = $state([]);
   let top = $state([]);
   let releases = $state([]);
+  let liked = $state([]);
+  let related = $state([]);
   let loaded = $state(false);
 
   let country = $state(localStorage.getItem("kite.chartsCountry") || "");
@@ -40,9 +44,11 @@
     Promise.all([
       invoke("lib_history", { order: "recent", limit: 8 }),
       invoke("lib_history", { order: "top", since, limit: 150 }),
+      invoke("lib_liked"),
       invoke("releases", { limit: 18 }),
     ])
-      .then(([r, t, rel]) => {
+      .then(([r, t, l, rel]) => {
+        liked = l;
         recent = r;
         top = t;
         releases = rel;
@@ -134,11 +140,59 @@
   const isPlaying = (t) => player.current?.url === t.url;
 
   // Two full rows of tiles (at least 220 px wide, 8 px apart); the rest wait in Recently played.
-  let tilesWidth = $state(0);
-  let recentShown = $derived(tilesWidth ? recent.slice(0, Math.max(1, Math.floor((tilesWidth + 8) / 228)) * 2) : recent);
+  // Tile grids show two full rows: tiles are at least 220 px wide with 8 px between, inside
+  // the page's 8 px side margins.
+  let viewWidth = $state(0);
+  let perRow = $derived(Math.max(1, Math.floor((viewWidth - 16 + 8) / 228)));
+  const twoRows = (list) => (viewWidth ? list.slice(0, perRow * 2) : list);
+
+  // "Because you liked": one of your 10 latest liked YouTube songs, a different one each day.
+  // With nothing liked yet, one of your 10 most played instead ("More like").
+  let fromLikes = $derived(liked.some((t) => t.source === "youtube"));
+  let seed = $derived.by(() => {
+    const yt = (fromLikes ? liked : top).filter((t) => t.source === "youtube");
+    if (!yt.length) return null;
+    const day = Math.floor(Date.now() / 86400e3);
+    return yt[day % Math.min(10, yt.length)];
+  });
+
+  $effect(() => {
+    const t = seed;
+    related = [];
+    if (!t) return;
+    const hit = relatedCache.get(t.url);
+    if (hit) return void (related = hit);
+    invoke("ytm_related", { videoId: t.id })
+      .then((r) => {
+        relatedCache.set(t.url, r.songs);
+        if (seed === t) related = r.songs;
+      })
+      .catch(() => {});
+  });
 </script>
 
-<div class="view">
+{#snippet tiles(list)}
+  <div class="tiles">
+    {#each twoRows(list) as t, i (t.url)}
+      <button
+        class="tile"
+        class:playing={isPlaying(t)}
+        onclick={() => player.playList(list, i)}
+        oncontextmenu={(e) => songMenu(e, list, i)}
+        onpointerenter={() => player.warm(t)}
+        title={`${t.title} · ${t.artist}`}
+      >
+        <span class="art">{#if t.artwork}<img src={artSrc(t.artwork)} alt="" loading="lazy" draggable="false" />{/if}</span>
+        <span class="txt">
+          <span class="name">{t.title}</span>
+          <span class="by">{t.artist}</span>
+        </span>
+      </button>
+    {/each}
+  </div>
+{/snippet}
+
+<div class="view" bind:clientWidth={viewWidth}>
   <div class="view-head">
     <h1>Home</h1>
   </div>
@@ -149,29 +203,20 @@
 
   {#if recent.length}
     <h2 class="section">Jump back in</h2>
-    <div class="tiles" bind:clientWidth={tilesWidth}>
-      {#each recentShown as t, i (t.url)}
-        <button
-          class="tile"
-          class:playing={isPlaying(t)}
-          onclick={() => player.playList(recent, i)}
-          oncontextmenu={(e) => songMenu(e, recent, i)}
-          onpointerenter={() => player.warm(t)}
-          title={`${t.title} · ${t.artist}`}
-        >
-          <span class="art">{#if t.artwork}<img src={artSrc(t.artwork)} alt="" loading="lazy" draggable="false" />{/if}</span>
-          <span class="txt">
-            <span class="name">{t.title}</span>
-            <span class="by">{t.artist}</span>
-          </span>
-        </button>
-      {/each}
-    </div>
+    {@render tiles(recent)}
   {/if}
 
   {#if mixes.length}
     <h2 class="section">Your mixes</h2>
     <Cards cards={mixes} rows={1} />
+  {/if}
+
+  {#if seed && related.length}
+    <div class="head">
+      <h2 class="section">{fromLikes ? "Because you liked" : "More like"} {seed.title}</h2>
+      <button class="btn text" onclick={() => player.playList(related, 0)}>Play all</button>
+    </div>
+    {@render tiles(related)}
   {/if}
 
   {#if releaseCards.length}
