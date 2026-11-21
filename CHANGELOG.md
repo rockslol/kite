@@ -12,6 +12,7 @@ What changed in each version of Kite. The newest version is at the top.
 - **Crossfade** (0-12 seconds): the next song fades in while this one fades out.
 - **Even out volume**: quiet and loud songs play at a similar level. Kite measures each song as it plays and remembers it, so it starts at the right level next time.
 - **Data saver** (Settings → Streaming): smaller streams, about half the data, for when you're on a hotspot.
+- **Volume per device** (Windows): headphones and speakers each keep their own volume. When Windows switches output, Kite switches to that device's volume and says where it's playing.
 - Kite only switches its sound engine on once you use one of these, so plain listening is as light as before.
 
 ## 0.3.0 (2026-11-22)

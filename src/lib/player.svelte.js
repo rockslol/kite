@@ -72,6 +72,9 @@ class Player {
   /** Crossfade length in seconds (0 = off). */
   crossfade = $state(Number(localStorage.getItem("kite.crossfade")) || 0);
   #xf = null; // { old, start, dur } while two songs overlap
+  // Volume per output device (Windows tells us when the default device changes).
+  #device = null;
+  #deviceVolumes = JSON.parse(localStorage.getItem("kite.deviceVolumes") || "{}");
   #xfTimer = null;
   #sleepTick = null;
   #warmToken = 0;
@@ -86,6 +89,8 @@ class Player {
     this.#wireAudio(this.#audio);
     this.#wireAudio(this.#standby);
     this.#wireMediaControls();
+    invoke("audio_device").then((d) => this.#onDevice(d, false)).catch(() => {});
+    listen("audio-device", ({ payload }) => this.#onDevice(payload, true));
 
     $effect.root(() => {
       $effect(() => {
@@ -95,6 +100,12 @@ class Player {
       });
       $effect(() => {
         localStorage.setItem("kite.crossfade", String(this.crossfade));
+      });
+      $effect(() => {
+        const v = this.volume;
+        if (!this.#device) return;
+        this.#deviceVolumes[this.#device] = v;
+        localStorage.setItem("kite.deviceVolumes", JSON.stringify(this.#deviceVolumes));
       });
       $effect(() => this.#save());
     });
@@ -346,6 +357,15 @@ class Player {
     if (!import.meta.env.DEV) return null;
     this.#pausedAt -= ms;
     return this.#audio;
+  }
+
+  /** The output device changed (or Kite started): use the volume last set on it. */
+  #onDevice(d, announce) {
+    if (!d?.id) return;
+    this.#device = d.id;
+    const saved = this.#deviceVolumes[d.id];
+    if (typeof saved === "number") this.volume = saved;
+    if (announce) toasts.show(`Playing on ${d.name || "another device"} · volume ${Math.round(this.volume * 100)}%`);
   }
 
   // ---- hooks for the sound engine ------------------------------------------

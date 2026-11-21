@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod audio_device;
 mod backup;
 mod import;
 mod hotkeys;
@@ -130,6 +131,7 @@ fn main() {
             let check_updates = prefs.get().check_updates;
             app.manage(prefs);
             app.manage(hotkeys::Registered::default());
+            audio_device::start(app.handle());
             app.manage(scrobble::Scrobbler::load(&data_dir));
             app.manage(discord::Discord::start(app.state::<app::Prefs>().get().discord));
             for (action, problem) in hotkeys::apply(app.handle()) {
@@ -174,6 +176,7 @@ fn main() {
             lyrics::lyrics_offset,
             hotkeys::hotkeys_apply,
             hotkeys::hotkeys_suspend,
+            audio_device::audio_device,
             scrobble::scrobble_status,
             scrobble::scrobble_now_playing,
             scrobble::scrobble,

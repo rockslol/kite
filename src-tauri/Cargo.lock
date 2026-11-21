@@ -2270,6 +2270,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "webview2-com",
+ "windows",
  "zip",
 ]
 
