@@ -80,6 +80,33 @@ CREATE TABLE IF NOT EXISTS scrobble_queue (
     track       TEXT NOT NULL,
     started_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS follows (
+    artist_id    TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    artwork      TEXT,
+    followed_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS releases (
+    id          TEXT PRIMARY KEY,
+    artist_id   TEXT NOT NULL,
+    artist      TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    subtitle    TEXT NOT NULL,
+    artwork     TEXT,
+    year        INTEGER,
+    pos         INTEGER NOT NULL,
+    first_seen  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS releases_artist ON releases(artist_id);
+CREATE TABLE IF NOT EXISTS artist_checks (
+    artist_id   TEXT PRIMARY KEY,
+    checked_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artist_names (
+    name         TEXT PRIMARY KEY,
+    artist_id    TEXT,
+    looked_up_at INTEGER NOT NULL
+);
 ";
 
 /// Columns added after the first release. `ALTER TABLE ADD COLUMN` fails if the column
@@ -87,9 +114,12 @@ CREATE TABLE IF NOT EXISTS scrobble_queue (
 const MIGRATIONS: &[&str] = &[
     "ALTER TABLE playlists ADD COLUMN source_url TEXT",
     "ALTER TABLE playlist_items ADD COLUMN origin TEXT",
+    "ALTER TABLE tracks ADD COLUMN artist_id TEXT",
+    "ALTER TABLE tracks ADD COLUMN album_id TEXT",
 ];
 
-const COLS: &str = "t.id, t.source, t.url, t.title, t.artist, t.album, t.duration, t.artwork, t.preview";
+/// The columns `row_track` reads, in order. Extra columns in a query come after these (index 11 on).
+pub const COLS: &str = "t.id, t.source, t.url, t.title, t.artist, t.album, t.duration, t.artwork, t.preview, t.artist_id, t.album_id";
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -110,7 +140,8 @@ pub fn row_track(r: &Row) -> rusqlite::Result<Track> {
         duration: r.get(6)?,
         artwork: r.get(7)?,
         preview: r.get::<_, i64>(8)? != 0,
-        ..Default::default()
+        artist_id: r.get(9)?,
+        album_id: r.get(10)?,
     })
 }
 
@@ -118,17 +149,19 @@ pub fn row_track(r: &Row) -> rusqlite::Result<Track> {
 /// overwritten from the UI.
 pub fn upsert(conn: &Connection, t: &Track) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO tracks (url, id, source, title, artist, album, duration, artwork, preview, added_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO tracks (url, id, source, title, artist, album, duration, artwork, preview, added_at, artist_id, album_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(url) DO UPDATE SET
             title = excluded.title,
             artist = excluded.artist,
             album = COALESCE(excluded.album, tracks.album),
             duration = COALESCE(excluded.duration, tracks.duration),
             artwork = COALESCE(excluded.artwork, tracks.artwork),
-            preview = excluded.preview
+            preview = excluded.preview,
+            artist_id = COALESCE(excluded.artist_id, tracks.artist_id),
+            album_id = COALESCE(excluded.album_id, tracks.album_id)
          WHERE tracks.source <> 'local'",
-        params![t.url, t.id, t.source, t.title, t.artist, t.album, t.duration, t.artwork, t.preview as i64, now()],
+        params![t.url, t.id, t.source, t.title, t.artist, t.album, t.duration, t.artwork, t.preview as i64, now(), t.artist_id, t.album_id],
     )?;
     Ok(())
 }
@@ -325,7 +358,7 @@ impl Library {
                      WHERE i.id = ?1 AND i.playlist_id = ?2"
                 ),
                 params![item_id, playlist_id],
-                |r| Ok((row_track(r)?, r.get(9)?)),
+                |r| Ok((row_track(r)?, r.get(11)?)),
             )
         })
     }
@@ -614,7 +647,7 @@ pub fn lib_playlist_items(lib: Lib<'_>, id: i64) -> Result<Vec<PlaylistItem>, St
             "SELECT {COLS}, i.id FROM playlist_items i JOIN tracks t ON t.url = i.url
              WHERE i.playlist_id = ?1 ORDER BY i.position, i.id"
         ))?;
-        let rows = st.query_map([id], |r| Ok(PlaylistItem { track: row_track(r)?, item_id: r.get(9)? }))?;
+        let rows = st.query_map([id], |r| Ok(PlaylistItem { track: row_track(r)?, item_id: r.get(11)? }))?;
         rows.collect()
     })
 }
@@ -699,7 +732,7 @@ pub fn lib_history(lib: Lib<'_>, order: String, since: Option<i64>, limit: Optio
              GROUP BY p.url ORDER BY {order_by} LIMIT ?2"
         ))?;
         let rows = st.query_map(params![since.unwrap_or(0), limit.unwrap_or(200)], |r| {
-            Ok(Played { track: row_track(r)?, plays: r.get(9)?, last_played: r.get(10)? })
+            Ok(Played { track: row_track(r)?, plays: r.get(11)?, last_played: r.get(12)? })
         })?;
         rows.collect()
     })

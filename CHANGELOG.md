@@ -10,6 +10,10 @@ What changed in each version of Kite. The newest version is at the top.
 - **Album pages**: every song, play or shuffle the album, or save it as a playlist. Click an album's name to open it.
 - **Radio**: start an endless radio from any song (right-click → Start radio) or from an artist's page. Kite keeps adding songs as you go.
 - **Back** button (also Alt+← and the mouse's back button) for moving between pages.
+- **Home**: songs you played lately, a mix for each artist you play most, new albums and singles from the artists you follow and play, and the charts for any of 70 countries (top songs, chart playlists, top artists).
+- **Follow artists** from their page. Kite checks for new releases every few hours and tells you when one comes out.
+- Chart playlists open like albums: play, shuffle or save them.
+- Library backups now include the artists you follow.
 
 ## 0.4.1 (2026-11-23)
 

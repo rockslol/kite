@@ -23,6 +23,7 @@
   import SettingsView from "./views/SettingsView.svelte";
   import ArtistView from "./views/ArtistView.svelte";
   import AlbumView from "./views/AlbumView.svelte";
+  import HomeView from "./views/HomeView.svelte";
   import "./lib/updates.svelte.js";
 
   const SOURCES = [
@@ -52,9 +53,19 @@
       await library.toggleLike(t);
       toasts.show(liked ? `Liked ${t.title}` : `Removed ${t.title} from liked songs`);
     });
+    // Found by the release watcher, for artists you follow.
+    const unReleases = listen("new-releases", ({ payload: list }) => {
+      if (list.length === 1) {
+        const r = list[0];
+        toasts.show(`New from ${r.artist}: ${r.title}`, { label: "Open", run: () => nav.go({ name: "album", id: r.id }) });
+      } else if (list.length > 1) {
+        toasts.show(`${list.length} new releases from artists you follow`, { label: "Show", run: () => nav.go({ name: "home" }) });
+      }
+    });
     return () => {
       unlisten.then((f) => f());
       unHotkey.then((f) => f());
+      unReleases.then((f) => f());
     };
   });
 
@@ -148,7 +159,9 @@
   <div class="body" class:with-queue={panel}>
     <Sidebar />
     <main>
-      {#if nav.view.name === "liked"}
+      {#if nav.view.name === "home"}
+        <HomeView />
+      {:else if nav.view.name === "liked"}
         <LikedView />
       {:else if nav.view.name === "history"}
         <HistoryView />

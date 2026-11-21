@@ -8,6 +8,8 @@
   import { artSrc, fmtTotal, plural } from "../lib/urls.js";
 
   let { id } = $props();
+  // Chart and other YouTube Music playlists (VL… ids) open here too.
+  let playlist = $derived(id.startsWith("VL"));
 
   let al = $state(null);
   let error = $state("");
@@ -56,11 +58,11 @@
         <h1>{al.title}</h1>
         <p class="sub">
           {#if al.artist_id}
-            <button class="artist" onclick={() => nav.go({ name: "artist", id: al.artist_id })}>{al.artist}</button>
-          {:else}
-            {al.artist}
+            <button class="artist" onclick={() => nav.go({ name: "artist", id: al.artist_id })}>{al.artist}</button> ·
+          {:else if al.artist}
+            {al.artist} ·
           {/if}
-          · {plural(al.tracks.length, "song")}{al.tracks.length ? ` · ${fmtTotal(al.tracks)}` : ""}
+          {plural(al.tracks.length, "song")}{al.tracks.length ? ` · ${fmtTotal(al.tracks)}` : ""}
         </p>
         <div class="actions">
           {#if al.tracks.length}
@@ -71,7 +73,7 @@
         </div>
       </div>
     </header>
-    <TrackList tracks={al.tracks} showAlbum={false} />
+    <TrackList tracks={al.tracks} showAlbum={playlist} />
   {/if}
 </div>
 

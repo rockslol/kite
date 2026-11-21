@@ -139,10 +139,10 @@ pub fn parse_search_row(r: &Value) -> Option<Track> {
 /// An album, single, playlist or artist shown as a card.
 #[derive(Serialize, Debug)]
 pub struct Card {
-    id: String,
-    title: String,
-    subtitle: String,
-    artwork: Option<String>,
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub artwork: Option<String>,
 }
 
 fn card(item: &Value) -> Option<Card> {
@@ -157,20 +157,20 @@ fn card(item: &Value) -> Option<Card> {
 
 #[derive(Serialize, Default, Debug)]
 pub struct Artist {
-    id: String,
-    name: String,
-    artwork: Option<String>,
+    pub id: String,
+    pub name: String,
+    pub artwork: Option<String>,
     /// "810K monthly audience" or "254K subscribers".
-    audience: String,
-    about: String,
-    songs: Vec<Track>,
+    pub audience: String,
+    pub about: String,
+    pub songs: Vec<Track>,
     /// The full song list, as a playlist to open.
-    all_songs: Option<String>,
-    albums: Vec<Card>,
-    singles: Vec<Card>,
-    similar: Vec<Card>,
+    pub all_songs: Option<String>,
+    pub albums: Vec<Card>,
+    pub singles: Vec<Card>,
+    pub similar: Vec<Card>,
     /// Playlist id for the artist's radio.
-    radio: Option<String>,
+    pub radio: Option<String>,
 }
 
 pub fn parse_artist(id: &str, v: &Value) -> Artist {
@@ -214,14 +214,18 @@ pub fn parse_artist(id: &str, v: &Value) -> Artist {
     a
 }
 
-#[tauri::command]
-pub async fn ytm_artist(state: State<'_, AppState>, id: String) -> Result<Artist, String> {
-    let v = call(&state.http, "browse", json!({ "browseId": id })).await?;
-    let a = parse_artist(&id, &v);
+pub async fn fetch_artist(http: &reqwest::Client, id: &str) -> Result<Artist, String> {
+    let v = call(http, "browse", json!({ "browseId": id })).await?;
+    let a = parse_artist(id, &v);
     if a.name.is_empty() {
         return Err("YouTube Music has no page for this artist.".into());
     }
     Ok(a)
+}
+
+#[tauri::command]
+pub async fn ytm_artist(state: State<'_, AppState>, id: String) -> Result<Artist, String> {
+    fetch_artist(&state.http, &id).await
 }
 
 /// All of an artist's songs (the playlist behind "Top songs → See all").
@@ -248,7 +252,9 @@ pub struct Album {
     tracks: Vec<Track>,
 }
 
+/// An album page, or a playlist page (`VL…` ids, such as charts), which has the same layout.
 pub fn parse_album(id: &str, v: &Value) -> Album {
+    let playlist = id.starts_with("VL");
     let tc = &v["contents"]["twoColumnBrowseResultsRenderer"];
     let h = &tc["tabs"][0]["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]["musicResponsiveHeaderRenderer"];
     let sub: Vec<String> = h["subtitle"]["runs"].as_array().into_iter().flatten().filter_map(|r| r["text"].as_str()).map(String::from).collect();
@@ -265,9 +271,22 @@ pub fn parse_album(id: &str, v: &Value) -> Album {
     };
     let small_art = al.artwork.as_deref().map(|u| resize_art_to(u, 300));
     let (artist, artist_id, title) = (al.artist.clone(), al.artist_id.clone(), al.title.clone());
-    let fb = Fallback { artist: Some((&artist, artist_id.as_deref())), album: Some((&title, id)), artwork: small_art.as_deref() };
-    let shelf = &tc["secondaryContents"]["sectionListRenderer"]["contents"][0]["musicShelfRenderer"]["contents"];
-    al.tracks = shelf.as_array().into_iter().flatten().filter_map(|i| parse_row(&i["musicResponsiveListItemRenderer"], &fb)).collect();
+    // Playlist rows name their own artists and covers; album rows leave them out.
+    let fb = if playlist {
+        Fallback::default()
+    } else {
+        Fallback { artist: Some((&artist, artist_id.as_deref())), album: Some((&title, id)), artwork: small_art.as_deref() }
+    };
+    let shelf = &tc["secondaryContents"]["sectionListRenderer"]["contents"][0];
+    let rows = shelf["musicShelfRenderer"]["contents"].as_array().or_else(|| shelf["musicPlaylistShelfRenderer"]["contents"].as_array());
+    al.tracks = rows.into_iter().flatten().filter_map(|i| parse_row(&i["musicResponsiveListItemRenderer"], &fb)).collect();
+    if playlist {
+        // "Chart • 2026": the kind is "Chart"; a playlist's year isn't worth showing.
+        if al.kind.is_empty() {
+            al.kind = "Playlist".into();
+        }
+        al.year = String::new();
+    }
     al
 }
 
@@ -276,9 +295,107 @@ pub async fn ytm_album(state: State<'_, AppState>, id: String) -> Result<Album, 
     let v = call(&state.http, "browse", json!({ "browseId": id })).await?;
     let a = parse_album(&id, &v);
     if a.title.is_empty() {
-        return Err("YouTube Music has no page for this album.".into());
+        return Err(format!("YouTube Music has no page for this {}.", if id.starts_with("VL") { "playlist" } else { "album" }));
     }
     Ok(a)
+}
+
+// ---- charts ------------------------------------------------------------------------------
+
+#[derive(Serialize, Debug)]
+pub struct Country {
+    code: String,
+    name: String,
+}
+
+#[derive(Serialize, Default, Debug)]
+pub struct Charts {
+    /// The country shown (YouTube Music picks one from the IP when none is asked for).
+    country: String,
+    countries: Vec<Country>,
+    /// Chart playlists: "Top 100 Music Videos", "Daily Top Music Videos", "Trending 20".
+    playlists: Vec<Card>,
+    artists: Vec<Card>,
+}
+
+/// Base64 (standard or URL-safe, padding ignored), for the country codes in the menu's keys.
+fn base64(s: &str) -> Vec<u8> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' | b'-' => Some(62),
+        b'/' | b'_' => Some(63),
+        _ => None,
+    };
+    let (mut out, mut acc, mut bits) = (vec![], 0u32, 0);
+    for v in s.bytes().filter_map(val) {
+        acc = ((acc << 6) | v as u32) & 0xffff;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// "EidleHBsb3Jl…%3D%3D" → "HU": the key holds `explore_charts_country_menu_<digits><CODE>`.
+fn country_code(key: &str) -> Option<String> {
+    let raw = base64(&key.replace("%3D", ""));
+    let raw = String::from_utf8_lossy(&raw);
+    let rest = &raw[raw.find("country_menu_")? + "country_menu_".len()..];
+    let code: String = rest.trim_start_matches(|c: char| c.is_ascii_digit()).chars().take(2).collect();
+    (code.len() == 2 && code.chars().all(|c| c.is_ascii_uppercase())).then_some(code)
+}
+
+pub fn parse_charts(v: &Value) -> Charts {
+    let mut ch = Charts::default();
+    let sections = &v["contents"]["singleColumnBrowseResultsRenderer"]["tabs"][0]["tabRenderer"]["content"]["sectionListRenderer"]["contents"];
+    for s in sections.as_array().into_iter().flatten() {
+        if let Some(shelf) = s.get("musicShelfRenderer") {
+            let menu = &shelf["subheaders"][0]["musicSideAlignedItemRenderer"]["startItems"][0]["musicSortFilterButtonRenderer"]["menu"]
+                ["musicMultiSelectMenuRenderer"];
+            for o in menu["options"].as_array().into_iter().flatten() {
+                let o = &o["musicMultiSelectMenuItemRenderer"];
+                let Some(code) = o["formItemEntityKey"].as_str().and_then(country_code) else { continue };
+                // The country shown is the only one without a command to pick it.
+                if o.get("selectedCommand").is_none() && ch.country.is_empty() {
+                    ch.country = code.clone();
+                }
+                ch.countries.push(Country { code, name: text(&o["title"]) });
+            }
+        } else if let Some(c) = s.get("musicCarouselShelfRenderer") {
+            let title = text(&c["header"]["musicCarouselShelfBasicHeaderRenderer"]["title"]).to_lowercase();
+            let items = c["contents"].as_array().into_iter().flatten();
+            if title.contains("artist") {
+                ch.artists = items
+                    .filter_map(|i| {
+                        let r = &i["musicResponsiveListItemRenderer"];
+                        let col = |n: usize| text(&r["flexColumns"][n]["musicResponsiveListItemFlexColumnRenderer"]["text"]);
+                        Some(Card { id: browse_id(r)?, title: col(0), subtitle: col(1), artwork: row_thumb(r, 300) })
+                    })
+                    .collect();
+            } else {
+                ch.playlists.extend(items.filter_map(card).filter(|c| c.id.starts_with("VL")));
+            }
+        }
+    }
+    ch
+}
+
+/// Charts for a country code ("HU", or "ZZ" for global), or YouTube Music's guess for `None`.
+#[tauri::command]
+pub async fn ytm_charts(state: State<'_, AppState>, country: Option<String>) -> Result<Charts, String> {
+    let mut body = json!({ "browseId": "FEmusic_charts" });
+    if let Some(c) = country.filter(|c| !c.is_empty()) {
+        body["formData"] = json!({ "selectedValues": [c] });
+    }
+    let ch = parse_charts(&call(&state.http, "browse", body).await?);
+    if ch.playlists.is_empty() && ch.artists.is_empty() {
+        return Err("YouTube Music didn't send any charts.".into());
+    }
+    Ok(ch)
 }
 
 // ---- radio -------------------------------------------------------------------------------
@@ -357,6 +474,12 @@ fn row_browse(r: &Value) -> Option<(String, String)> {
     Some((id, name))
 }
 
+/// The artist id for a name, only when YouTube Music has an artist with exactly that name.
+pub async fn find_artist_exact(http: &reqwest::Client, name: &str) -> Result<Option<String>, String> {
+    let rows: Vec<(String, String)> = search_rows(http, name, FILTER_ARTISTS).await?.iter().filter_map(row_browse).collect();
+    Ok(rows.into_iter().find(|(id, n)| id.starts_with("UC") && n.eq_ignore_ascii_case(name)).map(|(id, _)| id))
+}
+
 /// The artist page for a name: an exact (case-insensitive) match first, else the top result.
 #[tauri::command]
 pub async fn ytm_find_artist(state: State<'_, AppState>, name: String) -> Result<String, String> {
@@ -383,6 +506,44 @@ pub async fn ytm_find_album(state: State<'_, AppState>, artist: String, album: S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_country_codes_from_menu_keys() {
+        assert_eq!(country_code("EidleHBsb3JlX2NoYXJ0c19jb3VudHJ5X21lbnVfMzE2NzY2NTY3SFUgkQEoAQ%3D%3D").as_deref(), Some("HU"));
+        assert_eq!(country_code("EidleHBsb3JlX2NoYXJ0c19jb3VudHJ5X21lbnVfMzE2NzY2NTY3WlogkQEoAQ%3D%3D").as_deref(), Some("ZZ"));
+        assert_eq!(country_code("bm90aGluZw"), None);
+    }
+
+    /// Parses saved chart pages: `KITE_YTM_CHARTS=<dir> cargo test -- --ignored` with charts.json
+    /// and top100.json (a chart playlist) in that folder.
+    #[test]
+    #[ignore]
+    fn parses_saved_charts() {
+        let dir = std::path::PathBuf::from(std::env::var("KITE_YTM_CHARTS").expect("KITE_YTM_CHARTS"));
+        let read = |f: &str| -> Value { serde_json::from_str(&std::fs::read_to_string(dir.join(f)).unwrap()).unwrap() };
+        let ch = parse_charts(&read("charts.json"));
+        println!(
+            "charts: {} | {} countries | playlists {:?} | artists {} {:?}",
+            ch.country,
+            ch.countries.len(),
+            ch.playlists.iter().map(|c| &c.title).collect::<Vec<_>>(),
+            ch.artists.len(),
+            ch.artists.first()
+        );
+        assert!(ch.country.len() == 2 && ch.countries.len() > 50 && !ch.playlists.is_empty() && !ch.artists.is_empty());
+        let pl = parse_album("VLPL4fGSI1pDJn6-AkuEzkhgTBJq3Lm0Oolc", &read("top100.json"));
+        println!(
+            "playlist: {} | {} | {} tracks | {:?}",
+            pl.title,
+            pl.kind,
+            pl.tracks.len(),
+            pl.tracks.first().map(|t| (&t.title, &t.artist, t.duration, &t.artist_id, t.artwork.is_some()))
+        );
+        assert_eq!(pl.tracks.len(), 100);
+        let out = |f: &str, v: String| std::fs::write(dir.join(f), v).unwrap();
+        out("parsed-charts.json", serde_json::to_string(&ch).unwrap());
+        out("parsed-top100.json", serde_json::to_string(&pl).unwrap());
+    }
 
     /// Parses saved YouTube Music responses: `KITE_YTM_SAMPLES=<dir> cargo test -- --ignored`
     /// with artist.json, album.json, radio.json and search.json in that folder.

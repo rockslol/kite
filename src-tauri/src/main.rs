@@ -7,6 +7,7 @@ mod import;
 mod hotkeys;
 mod discord;
 mod discover;
+mod follow;
 mod library;
 mod log;
 mod lyrics;
@@ -162,6 +163,7 @@ fn main() {
             app.manage(AppState { yt: yt.clone(), streams, library: library.clone(), http: http.clone() });
             // Pick up files added or changed while the app was closed, then watch for more.
             watch::start(app.handle(), library.clone());
+            follow::start(app.handle());
             local::rescan(app.handle().clone(), library);
 
             let handle = app.handle().clone();
@@ -185,6 +187,10 @@ fn main() {
             discover::ytm_playlist_songs,
             discover::ytm_find_artist,
             discover::ytm_find_album,
+            discover::ytm_charts,
+            follow::releases,
+            follow::follows,
+            follow::follow_set,
             scrobble::scrobble_status,
             scrobble::scrobble_now_playing,
             scrobble::scrobble,

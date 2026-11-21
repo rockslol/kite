@@ -206,6 +206,7 @@
         r.likes && `${r.likes} liked songs`,
         r.plays && `${r.plays} plays`,
         r.folders && `${r.folders} music folders`,
+        r.follows && `${r.follows} followed artists`,
       ].filter(Boolean);
       toasts.show(parts.length ? `Imported ${parts.join(", ")}` : "Nothing new to import, your library already has all of it");
     } catch (e) {

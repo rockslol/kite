@@ -3,7 +3,7 @@
 //! Importing merges into the library that's already there, so importing the same file twice
 //! changes nothing the second time.
 
-use crate::library::{now, row_track, Library};
+use crate::library::{now, row_track, Library, COLS};
 use crate::ytdlp::Track;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,17 @@ pub struct Backup {
     folders: Vec<String>,
     #[serde(default)]
     matches: Vec<Match>,
+    #[serde(default)]
+    follows: Vec<Follow>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Follow {
+    artist_id: String,
+    name: String,
+    #[serde(default)]
+    artwork: Option<String>,
+    followed_at: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -83,6 +94,7 @@ pub struct Summary {
     playlist_songs: usize,
     plays: usize,
     folders: usize,
+    follows: usize,
 }
 
 fn rows<T>(c: &Connection, sql: &str, f: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>) -> rusqlite::Result<Vec<T>> {
@@ -96,11 +108,13 @@ fn rows<T>(c: &Connection, sql: &str, f: impl FnMut(&rusqlite::Row) -> rusqlite:
 pub fn export(c: &Connection) -> rusqlite::Result<Backup> {
     let tracks = rows(
         c,
-        "SELECT t.id, t.source, t.url, t.title, t.artist, t.album, t.duration, t.artwork, t.preview, t.path, t.folder, t.added_at
+        &format!(
+            "SELECT {COLS}, t.path, t.folder, t.added_at
          FROM tracks t
          WHERE t.url IN (SELECT url FROM likes UNION SELECT url FROM playlist_items UNION SELECT url FROM plays)
-         ORDER BY t.added_at, t.url",
-        |r| Ok(SavedTrack { track: row_track(r)?, path: r.get(9)?, folder: r.get(10)?, added_at: r.get(11)? }),
+         ORDER BY t.added_at, t.url"
+        ),
+        |r| Ok(SavedTrack { track: row_track(r)?, path: r.get(11)?, folder: r.get(12)?, added_at: r.get(13)? }),
     )?;
     let likes = rows(c, "SELECT url, liked_at FROM likes ORDER BY liked_at", |r| {
         Ok(Like { url: r.get(0)?, liked_at: r.get(1)? })
@@ -130,6 +144,9 @@ pub fn export(c: &Connection) -> rusqlite::Result<Backup> {
     let matches = rows(c, "SELECT key, track, updated_at FROM matches ORDER BY key", |r| {
         Ok(Match { key: r.get(0)?, track: r.get(1)?, updated_at: r.get(2)? })
     })?;
+    let follows = rows(c, "SELECT artist_id, name, artwork, followed_at FROM follows ORDER BY followed_at", |r| {
+        Ok(Follow { artist_id: r.get(0)?, name: r.get(1)?, artwork: r.get(2)?, followed_at: r.get(3)? })
+    })?;
     Ok(Backup {
         kite_library: FORMAT,
         exported_at: now(),
@@ -139,6 +156,7 @@ pub fn export(c: &Connection) -> rusqlite::Result<Backup> {
         plays,
         folders,
         matches,
+        follows,
     })
 }
 
@@ -157,11 +175,12 @@ pub fn import(c: &mut Connection, b: &Backup) -> rusqlite::Result<Summary> {
         // Local files come in with no mtime, so the next scan reads them again (or drops
         // them if the file isn't on this PC).
         sum.songs += tx.execute(
-            "INSERT OR IGNORE INTO tracks (url, id, source, title, artist, album, duration, artwork, preview, path, folder, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT OR IGNORE INTO tracks (url, id, source, title, artist, album, duration, artwork, preview, path, folder, added_at,
+                                          artist_id, album_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 t.url, t.id, t.source, t.title, t.artist, t.album, t.duration, t.artwork, t.preview as i64, s.path, s.folder,
-                s.added_at
+                s.added_at, t.artist_id, t.album_id
             ],
         )?;
     }
@@ -229,6 +248,12 @@ pub fn import(c: &mut Connection, b: &Backup) -> rusqlite::Result<Summary> {
             params![m.key, m.track, m.updated_at],
         )?;
     }
+    for f in &b.follows {
+        sum.follows += tx.execute(
+            "INSERT OR IGNORE INTO follows (artist_id, name, artwork, followed_at) VALUES (?1, ?2, ?3, ?4)",
+            params![f.artist_id, f.name, f.artwork, f.followed_at],
+        )?;
+    }
     tx.commit()?;
     Ok(sum)
 }
@@ -271,7 +296,7 @@ pub async fn lib_import(app: AppHandle, lib: Lib<'_>, path: String) -> Result<Su
     let text = tokio::fs::read_to_string(&path).await.map_err(|e| format!("Couldn't read the file: {e}"))?;
     let b = parse(&text)?;
     let sum = lib.with(|c| import(c, &b))?;
-    for what in ["likes", "playlists", "history", "local"] {
+    for what in ["likes", "playlists", "history", "local", "follows"] {
         let _ = app.emit("library-changed", what);
     }
     if sum.folders > 0 {

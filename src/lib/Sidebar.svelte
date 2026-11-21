@@ -5,6 +5,7 @@
   import { updates } from "./updates.svelte.js";
 
   const MAIN = [
+    { name: "home", label: "Home" },
     { name: "search", label: "Search" },
     { name: "liked", label: "Liked songs" },
     { name: "history", label: "Recently played" },

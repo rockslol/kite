@@ -4,6 +4,7 @@
   import TrackList from "../lib/TrackList.svelte";
   import Cards from "../lib/Cards.svelte";
   import { player } from "../lib/player.svelte.js";
+  import { library } from "../lib/library.svelte.js";
   import { artSrc } from "../lib/urls.js";
 
   let { id } = $props();
@@ -59,6 +60,9 @@
           {#if a.radio}
             <button class="btn" onclick={() => player.startRadio({ playlistId: a.radio, title: a.name })}>Radio</button>
           {/if}
+          <button class="btn" class:on={library.isFollowed(a.id)} onclick={() => library.toggleFollow(a)}>
+            {library.isFollowed(a.id) ? "Following" : "Follow"}
+          </button>
         </div>
       </div>
     </header>
@@ -126,6 +130,9 @@
   }
   .who .actions {
     margin-top: 14px;
+  }
+  .btn.on {
+    background: var(--accent-soft);
   }
   .head {
     display: flex;

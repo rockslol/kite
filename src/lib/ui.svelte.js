@@ -1,8 +1,8 @@
 // Small pieces of shared UI state: navigation, the right-click menu and toasts.
 
 class Nav {
-  /** { name: "search" | "liked" | "history" | "local" | "playlist", id?: number } */
-  view = $state(JSON.parse(localStorage.getItem("kite.view") || '{"name":"search"}'));
+  /** { name: "home" | "search" | "liked" | "history" | "local" | "playlist" | "artist" | "album", id? } */
+  view = $state(JSON.parse(localStorage.getItem("kite.view") || '{"name":"home"}'));
 
   /** Earlier pages, for Back. */
   history = $state([]);

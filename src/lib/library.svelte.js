@@ -2,7 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { SvelteSet } from "svelte/reactivity";
+import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { nav, toasts } from "./ui.svelte.js";
 
 const FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview", "artist_id", "album_id"];
@@ -12,6 +12,8 @@ export const plain = (t) => Object.fromEntries(FIELDS.map((f) => [f, t[f] ?? nul
 
 class Library {
   liked = new SvelteSet();
+  /** Followed artists by id: { id, name, artwork }. */
+  follows = new SvelteMap();
   playlists = $state([]);
   folders = $state([]);
   scan = $state({ state: "idle" });
@@ -24,6 +26,7 @@ class Library {
       if (payload === "likes") this.#loadLikes();
       if (payload === "playlists") this.#loadPlaylists();
       if (payload === "local") this.#loadFolders();
+      if (payload === "follows") this.#loadFollows();
       this.version++;
     });
     listen("scan", ({ payload }) => {
@@ -39,6 +42,31 @@ class Library {
     this.#loadLikes();
     this.#loadPlaylists();
     this.#loadFolders();
+    this.#loadFollows();
+  }
+
+  async #loadFollows() {
+    const list = await invoke("follows").catch(() => []);
+    this.follows.clear();
+    for (const a of list) this.follows.set(a.id, a);
+  }
+
+  isFollowed(id) {
+    return this.follows.has(id);
+  }
+
+  /** Follow or unfollow an artist page ({ id, name, artwork }). */
+  async toggleFollow(artist) {
+    const on = !this.follows.has(artist.id);
+    const a = { id: artist.id, name: artist.name, artwork: artist.artwork ?? null };
+    on ? this.follows.set(a.id, a) : this.follows.delete(a.id);
+    try {
+      await invoke("follow_set", { artist: a, on });
+      toasts.show(on ? `Following ${a.name}. New releases will show up on Home` : `Stopped following ${a.name}`);
+    } catch (e) {
+      on ? this.follows.delete(a.id) : this.follows.set(a.id, a);
+      toasts.show(String(e));
+    }
   }
 
   async #loadLikes() {
