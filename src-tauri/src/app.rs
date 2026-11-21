@@ -19,11 +19,16 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// Check for a new version at startup.
     pub check_updates: bool,
+    /// Shortcuts that work while Kite is in the background (off by default).
+    pub hotkeys_on: bool,
+    pub hotkeys: crate::hotkeys::Hotkeys,
+    /// Show what's playing as Discord status (off by default: friends can see it).
+    pub discord: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { close_to_tray: true, check_updates: true }
+        Self { close_to_tray: true, check_updates: true, hotkeys_on: false, hotkeys: Default::default(), discord: false }
     }
 }
 
@@ -143,8 +148,10 @@ pub fn settings_get(app: AppHandle, prefs: State<'_, Prefs>) -> SettingsView {
 }
 
 #[tauri::command]
-pub fn settings_set(prefs: State<'_, Prefs>, settings: Settings) -> Result<(), String> {
-    prefs.set(settings)
+pub fn settings_set(app: AppHandle, prefs: State<'_, Prefs>, settings: Settings) -> Result<(), String> {
+    prefs.set(settings)?;
+    crate::discord::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]

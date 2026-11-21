@@ -93,7 +93,19 @@ pub fn media_track(
     artist: String,
     artwork: Option<String>,
     duration: Option<f64>,
+    url: Option<String>,
+    album: Option<String>,
 ) {
+    if let Some(d) = app.try_state::<crate::discord::Discord>() {
+        d.set_song(crate::discord::Song {
+            title: title.clone(),
+            artist: artist.clone(),
+            album,
+            artwork: artwork.clone(),
+            url,
+            duration,
+        });
+    }
     // Artwork from local files is stored as `art:<file>`; the OS wants a real file.
     let artwork = match artwork.as_deref().and_then(|a| a.strip_prefix("art:")) {
         Some(name) => app
@@ -115,6 +127,9 @@ pub fn media_track(
 /// `state` is "playing", "paused" or "stopped".
 #[tauri::command]
 pub fn media_state(app: AppHandle, state: String, position: Option<f64>) {
+    if let Some(d) = app.try_state::<crate::discord::Discord>() {
+        d.set_state(state == "playing", position);
+    }
     with_controls(&app, move |c| {
         let progress = position
             .filter(|p| p.is_finite() && *p >= 0.0)

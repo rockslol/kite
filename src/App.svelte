@@ -9,6 +9,7 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import PlayerBar from "./lib/PlayerBar.svelte";
   import QueuePanel from "./lib/QueuePanel.svelte";
+  import LyricsPanel from "./lib/LyricsPanel.svelte";
   import ContextMenu from "./lib/ContextMenu.svelte";
   import ImportDialog from "./lib/ImportDialog.svelte";
   import { importer } from "./lib/importer.svelte.js";
@@ -27,15 +28,30 @@
   ];
 
   let tool = $state({ state: "checking" });
-  let showQueue = $state(localStorage.getItem("showQueue") === "1");
+  // The right-hand panel: "queue", "lyrics" or "" (closed).
+  let panel = $state(localStorage.getItem("kite.panel") ?? (localStorage.getItem("showQueue") === "1" ? "queue" : ""));
+  const togglePanel = (name) => (panel = panel === name ? "" : name);
   let searchInput;
 
-  $effect(() => localStorage.setItem("showQueue", showQueue ? "1" : "0"));
+  $effect(() => {
+    localStorage.setItem("kite.panel", panel);
+  });
 
   onMount(() => {
     invoke("tool_status").then((s) => (tool = s));
     const unlisten = listen("tool-status", (e) => (tool = e.payload));
-    return () => unlisten.then((f) => f());
+    // The "like" shortcut that works everywhere.
+    const unHotkey = listen("hotkey", async ({ payload }) => {
+      const t = player.current;
+      if (payload.action !== "like" || !t) return;
+      const liked = !library.isLiked(t);
+      await library.toggleLike(t);
+      toasts.show(liked ? `Liked ${t.title}` : `Removed ${t.title} from liked songs`);
+    });
+    return () => {
+      unlisten.then((f) => f());
+      unHotkey.then((f) => f());
+    };
   });
 
   function submit(e) {
@@ -69,7 +85,9 @@
     } else if (e.key === "ArrowLeft") {
       player.seekBy(-5);
     } else if (e.key === "q" && !e.ctrlKey) {
-      showQueue = !showQueue;
+      togglePanel("queue");
+    } else if (e.key === "y" && !e.ctrlKey) {
+      togglePanel("lyrics");
     } else if (e.key === "l" && !e.ctrlKey && player.current) {
       library.toggleLike(player.current);
     }
@@ -111,7 +129,7 @@
     <div class="notice error">{tool.message}</div>
   {/if}
 
-  <div class="body" class:with-queue={showQueue}>
+  <div class="body" class:with-queue={panel}>
     <Sidebar />
     <main>
       {#if nav.view.name === "liked"}
@@ -128,12 +146,14 @@
         <SearchView />
       {/if}
     </main>
-    {#if showQueue}
+    {#if panel === "queue"}
       <QueuePanel />
+    {:else if panel === "lyrics"}
+      <LyricsPanel />
     {/if}
   </div>
 
-  <PlayerBar bind:showQueue onplay={playPause} />
+  <PlayerBar bind:panel onplay={playPause} />
 </div>
 
 <ContextMenu />

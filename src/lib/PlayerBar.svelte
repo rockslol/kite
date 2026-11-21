@@ -4,7 +4,8 @@
   import { songMenu } from "./menus.js";
   import { artSrc, fmtTime } from "./urls.js";
 
-  let { showQueue = $bindable(), onplay } = $props();
+  let { panel = $bindable(), onplay } = $props();
+  const toggle = (name) => (panel = panel === name ? "" : name);
 
   let current = $derived(player.current);
   let liked = $derived(current && library.liked.has(current.url));
@@ -95,7 +96,13 @@
   </div>
 
   <div class="right">
-    <button class="icon small" class:on={showQueue} onclick={() => (showQueue = !showQueue)} aria-label="Queue" title="Queue">
+    <button class="icon small" class:on={panel === "lyrics"} onclick={() => toggle("lyrics")} aria-label="Lyrics" title="Lyrics (Y)">
+      <svg viewBox="0 0 24 24">
+        <rect x="9" y="3.5" width="6" height="10.5" rx="3" class="stroke" />
+        <path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21" class="stroke" />
+      </svg>
+    </button>
+    <button class="icon small" class:on={panel === "queue"} onclick={() => toggle("queue")} aria-label="Queue" title="Queue (Q)">
       <svg viewBox="0 0 24 24">
         <path d="M4 6h13M4 11h13M4 16h7" class="stroke" />
         <path d="M14.5 14v6a.4.4 0 0 0 .6.3l4.6-3a.4.4 0 0 0 0-.6l-4.6-3a.4.4 0 0 0-.6.3z" />

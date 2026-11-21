@@ -1,6 +1,6 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { library } from "../lib/library.svelte.js";
   import { nav, menu, toasts } from "../lib/ui.svelte.js";
   import { updates } from "../lib/updates.svelte.js";
@@ -18,9 +18,122 @@
 
   async function save(patch) {
     s = { ...s, ...patch };
-    await invoke("settings_set", { settings: { close_to_tray: s.close_to_tray, check_updates: s.check_updates } }).catch((e) =>
+    const { close_to_tray, check_updates, hotkeys_on, hotkeys, discord } = s;
+    await invoke("settings_set", { settings: { close_to_tray, check_updates, hotkeys_on, hotkeys, discord } }).catch((e) =>
       toasts.show(String(e))
     );
+    if ("hotkeys_on" in patch || "hotkeys" in patch) problems = await invoke("hotkeys_apply");
+  }
+
+  // ---- scrobbling
+  let accounts = $state({ lastfm_available: false, lastfm_user: "", listenbrainz_user: "" });
+  let lastfmBusy = $state(false);
+  let lbToken = $state("");
+  let lbBusy = $state(false);
+
+  onMount(async () => {
+    accounts = await invoke("scrobble_status").catch(() => accounts);
+  });
+
+  async function connectLastfm() {
+    lastfmBusy = true;
+    try {
+      const user = await invoke("lastfm_connect");
+      accounts = { ...accounts, lastfm_user: user };
+      toasts.show(`Scrobbling to Last.fm as ${user}`);
+    } catch (e) {
+      toasts.show(String(e));
+    }
+    lastfmBusy = false;
+  }
+
+  async function disconnectLastfm() {
+    await invoke("lastfm_disconnect").catch((e) => toasts.show(String(e)));
+    accounts = { ...accounts, lastfm_user: "" };
+  }
+
+  async function connectListenbrainz(e) {
+    e.preventDefault();
+    if (!lbToken.trim()) return;
+    lbBusy = true;
+    try {
+      const user = await invoke("listenbrainz_connect", { token: lbToken });
+      accounts = { ...accounts, listenbrainz_user: user };
+      lbToken = "";
+      toasts.show(`Sending listens to ListenBrainz as ${user}`);
+    } catch (err) {
+      toasts.show(String(err));
+    }
+    lbBusy = false;
+  }
+
+  async function disconnectListenbrainz() {
+    await invoke("listenbrainz_disconnect").catch((e) => toasts.show(String(e)));
+    accounts = { ...accounts, listenbrainz_user: "" };
+  }
+
+  // ---- shortcuts that work everywhere
+  const ACTIONS = [
+    ["toggle", "Play or pause"],
+    ["next", "Next song"],
+    ["previous", "Previous song"],
+    ["like", "Like the current song"],
+    ["show", "Show Kite"],
+  ];
+  const MAC = navigator.userAgent.includes("Mac");
+  const MODIFIERS = new Set(["Control", "Alt", "Shift", "Meta", "AltGraph", "OS"]);
+  let recording = $state(null); // the action whose keys are being recorded
+  let problems = $state({});
+
+  onMount(async () => {
+    problems = await invoke("hotkeys_apply").catch(() => ({}));
+  });
+  // Leaving Settings mid-recording mustn't leave the shortcuts switched off.
+  onDestroy(() => {
+    if (recording) invoke("hotkeys_apply").catch(() => {});
+  });
+
+  /** "Ctrl+Alt+ArrowRight" → "Ctrl + Alt + →" */
+  function pretty(keys) {
+    if (!keys) return "Not set";
+    const names = { ArrowRight: "→", ArrowLeft: "←", ArrowUp: "↑", ArrowDown: "↓", Super: MAC ? "Cmd" : "Win" };
+    return keys
+      .split("+")
+      .map((k) => names[k] ?? k.replace(/^Key/, "").replace(/^Digit/, ""))
+      .join(" + ");
+  }
+
+  async function record(action) {
+    recording = action;
+    // Registered shortcuts would swallow the keys before the window sees them.
+    await invoke("hotkeys_suspend").catch(() => {});
+  }
+
+  async function stopRecording() {
+    recording = null;
+    problems = await invoke("hotkeys_apply").catch(() => ({}));
+  }
+
+  function recordKey(e) {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (MODIFIERS.has(e.key)) return; // wait for the actual key
+    const action = recording;
+    if (e.key === "Escape") return stopRecording();
+    if ((e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      recording = null;
+      return save({ hotkeys: { ...s.hotkeys, [action]: "" } });
+    }
+    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
+    // A plain key (or Shift + key) would fire while typing anywhere; F13-F24 and media keys are fine alone.
+    const standalone = /^F(1[3-9]|2[0-4])$/.test(e.code) || e.code.startsWith("Media") || e.code.startsWith("Audio");
+    if (!standalone && !mods.some((m) => m !== "Shift")) {
+      problems = { ...problems, [action]: "Use Ctrl, Alt or " + (MAC ? "Cmd" : "Win") + " with the key" };
+      return;
+    }
+    recording = null;
+    save({ hotkeys: { ...s.hotkeys, [action]: [...mods, e.code].join("+") } });
   }
 
   async function setAutostart(on) {
@@ -131,6 +244,8 @@
   };
 </script>
 
+<svelte:window onkeydowncapture={recordKey} />
+
 {#snippet toggle(on, onchange, label)}
   <button class="switch" class:on role="switch" aria-checked={on} aria-label={label} onclick={() => onchange(!on)}><span></span></button>
 {/snippet}
@@ -149,6 +264,92 @@
         <div><p class="label">Keep playing when the window is closed</p><p class="hint">Closing Kite hides it to the tray. Quit from the tray icon.</p></div>
         {@render toggle(s.close_to_tray, (v) => save({ close_to_tray: v }), "Keep playing when closed")}
       </div>
+    </section>
+
+    <section>
+      <h2>Sharing</h2>
+      <div class="row">
+        <div>
+          <p class="label">Show what you're listening to on Discord</p>
+          <p class="hint">Your Discord status shows the song, artist and cover, with a button to listen. Clears when you pause. Needs the Discord app running.</p>
+        </div>
+        {@render toggle(s.discord, (v) => save({ discord: v }), "Show on Discord")}
+      </div>
+      {#if accounts.lastfm_available}
+        <div class="row">
+          <div>
+            <p class="label">Last.fm</p>
+            <p class="hint">
+              {#if accounts.lastfm_user}
+                Scrobbling as {accounts.lastfm_user}.
+              {:else if lastfmBusy}
+                Approve Kite in the browser window that opened.
+              {:else}
+                Scrobble what you play to your Last.fm profile.
+              {/if}
+            </p>
+          </div>
+          {#if accounts.lastfm_user}
+            <button class="btn" onclick={disconnectLastfm}>Disconnect</button>
+          {:else}
+            <button class="btn" onclick={connectLastfm} disabled={lastfmBusy}>{lastfmBusy ? "Waiting…" : "Connect"}</button>
+          {/if}
+        </div>
+      {/if}
+      <div class="row">
+        <div>
+          <p class="label">ListenBrainz</p>
+          <p class="hint">
+            {#if accounts.listenbrainz_user}
+              Sending listens as {accounts.listenbrainz_user}.
+            {:else}
+              Send what you play to ListenBrainz. Paste your user token from
+              <span class="mono">listenbrainz.org/settings</span>.
+            {/if}
+          </p>
+        </div>
+        {#if accounts.listenbrainz_user}
+          <button class="btn" onclick={disconnectListenbrainz}>Disconnect</button>
+        {:else}
+          <form class="pair" onsubmit={connectListenbrainz}>
+            <input class="token" type="text" placeholder="User token" bind:value={lbToken} spellcheck="false" autocomplete="off" />
+            <button class="btn" disabled={lbBusy || !lbToken.trim()}>{lbBusy ? "Checking…" : "Connect"}</button>
+          </form>
+        {/if}
+      </div>
+    </section>
+
+    <section>
+      <h2>Keyboard shortcuts</h2>
+      <div class="row">
+        <div>
+          <p class="label">Shortcuts that work everywhere</p>
+          <p class="hint">Control Kite while you're in another app. They also work inside games, so they're off until you switch them on.</p>
+        </div>
+        {@render toggle(s.hotkeys_on, (v) => save({ hotkeys_on: v }), "Shortcuts that work everywhere")}
+      </div>
+      {#if s.hotkeys_on}
+        {#each ACTIONS as [action, label]}
+          <div class="row keyrow">
+            <div>
+              <p class="label">{label}</p>
+              {#if recording === action}
+                <p class="hint">Press the keys. Esc cancels, Backspace clears.</p>
+              {:else if problems[action]}
+                <p class="hint error">{problems[action]}</p>
+              {/if}
+            </div>
+            <button
+              class="btn keys"
+              class:recording={recording === action}
+              class:unset={!s.hotkeys[action]}
+              onclick={() => (recording === action ? stopRecording() : record(action))}
+            >
+              {recording === action ? "Press keys…" : pretty(s.hotkeys[action])}
+            </button>
+          </div>
+        {/each}
+      {/if}
     </section>
 
     <section>
@@ -280,6 +481,36 @@
     color: var(--muted);
     font-size: 13px;
     word-break: break-word;
+  }
+  .token {
+    width: 190px;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    outline: none;
+    user-select: text;
+  }
+  .token:focus {
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+  .mono {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+  }
+  .keys {
+    min-width: 150px;
+    font-variant-numeric: tabular-nums;
+  }
+  .keys.unset {
+    color: var(--muted);
+  }
+  .keys.recording {
+    border-color: var(--text);
+  }
+  .keyrow {
+    padding: 8px 0;
   }
   .pair {
     display: flex;

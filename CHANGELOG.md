@@ -2,6 +2,22 @@
 
 What changed in each version of Kite. The newest version is at the top.
 
+## 0.3.0 (not released yet)
+
+### Lyrics
+
+- **Synced lyrics** beside the song list (the microphone button, or **Y**): the line being sung is highlighted and kept in the middle, and clicking a line jumps there. Lyrics come from [LRCLIB](https://lrclib.net), free and without an account, or from a `.lrc` or `.txt` file next to a local song.
+- **Early or late?** Nudge the lyrics by half a second at a time; Kite remembers it for that song.
+
+### Sharing
+
+- **Discord status** (Settings → Sharing, off until you switch it on): "Listening to Kite" with the song, artist, cover, a progress bar and a button to listen. Clears when you pause.
+- **Scrobble to Last.fm and ListenBrainz** with your own account: "now playing" when a song starts, and a scrobble once you've heard half of it (or 4 minutes). Scrobbles made offline are sent later.
+
+### Control
+
+- **Shortcuts that work everywhere** (Settings → Keyboard shortcuts): play or pause, next, previous, like and show Kite while you're in another app. Off until you switch them on, and every key can be changed.
+
 ## 0.2.0 (2026-11-21)
 
 ### Play

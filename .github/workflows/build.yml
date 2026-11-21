@@ -1,6 +1,7 @@
 name: Build
 
-# Run by hand (Actions tab → Build → Run workflow). Needs the TAURI_SIGNING_PRIVATE_KEY secret.
+# Run by hand (Actions tab → Build → Run workflow). Needs the TAURI_SIGNING_PRIVATE_KEY and
+# LASTFM_SECRET secrets.
 # The macOS job's artifact holds the DMG plus the signed .app.tar.gz the updater downloads.
 on:
   workflow_dispatch:
@@ -38,6 +39,8 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Last.fm's shared secret (build.rs bakes it in); without it the build has no Last.fm.
+          KITE_LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
         with:
           args: ${{ matrix.args }}
 

@@ -59,6 +59,10 @@ class Player {
   #resumeAt = 0;
   #original = null; // queue order before shuffling, as keys
   #counted = false;
+  // Scrobbling: "now playing" once per song, a scrobble once it's been played long enough.
+  #announced = false;
+  #scrobbled = false;
+  #startedAt = 0; // unix seconds when this song started
   #pausedAt = 0;
   #warmToken = 0;
   #warming = null; // the list warmList is working through
@@ -320,7 +324,7 @@ class Player {
     this.time = startAt;
     this.duration = track.duration || 0;
     this.#resumeAt = 0;
-    if (!resume) this.#counted = false;
+    if (!resume) this.#newSong();
     this.#sendTrack(track);
 
     try {
@@ -397,13 +401,23 @@ class Player {
     this.error = "";
     this.time = 0;
     this.duration = this.current?.duration || 0;
-    this.#counted = false;
+    this.#newSong();
     this.#sendTrack(this.current);
     this.#audio.currentTime = 0;
     this.#audio.play().catch((e) => {
       if (e.name !== "AbortError" && token === this.#token) this.#failed();
     });
     this.#warmUpcoming();
+  }
+
+  #newSong() {
+    this.#counted = false;
+    this.#announced = false;
+    this.#scrobbled = false;
+  }
+
+  #plain(t) {
+    return Object.fromEntries(TRACK_FIELDS.map((f) => [f, t[f] ?? null]));
   }
 
   #stop() {
@@ -426,6 +440,11 @@ class Player {
       this.playing = true;
       this.loading = false;
       this.#media("playing");
+      if (!this.#announced && this.current) {
+        this.#announced = true;
+        this.#startedAt = Math.floor(Date.now() / 1000 - a.currentTime);
+        invoke("scrobble_now_playing", { track: this.#plain(this.current) }).catch(() => {});
+      }
     });
     a.addEventListener("pause", () => {
       if (!active()) return;
@@ -451,9 +470,13 @@ class Player {
       // Counts as a play after 30 s, or halfway through shorter songs.
       if (!this.#counted && this.current && a.currentTime >= Math.min(30, (a.duration || 60) / 2)) {
         this.#counted = true;
-        const t = this.current;
-        const track = Object.fromEntries(TRACK_FIELDS.map((f) => [f, t[f] ?? null]));
-        invoke("lib_played", { track }).catch(() => {});
+        invoke("lib_played", { track: this.#plain(this.current) }).catch(() => {});
+      }
+      // Scrobbles follow the usual rule: songs over 30 s, once half (or 4 minutes) has played.
+      const d = a.duration;
+      if (!this.#scrobbled && this.current && d > 30 && a.currentTime >= Math.min(d / 2, 240)) {
+        this.#scrobbled = true;
+        invoke("scrobble", { track: this.#plain(this.current), startedAt: this.#startedAt }).catch(() => {});
       }
       if (Date.now() - lastSave > 5000) {
         lastSave = Date.now();
@@ -522,6 +545,8 @@ class Player {
       artist: t.artist || "",
       artwork: t.artwork,
       duration: duration || null,
+      url: t.url,
+      album: t.album || null,
     }).catch(() => {});
   }
 

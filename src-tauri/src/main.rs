@@ -3,10 +3,14 @@
 mod app;
 mod backup;
 mod import;
+mod hotkeys;
+mod discord;
 mod library;
 mod log;
+mod lyrics;
 mod local;
 mod media;
+mod scrobble;
 mod stream;
 mod titles;
 mod ytdlp;
@@ -79,6 +83,7 @@ fn main() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(hotkeys::plugin())
         .register_asynchronous_uri_scheme_protocol("kite", |ctx, request, responder| {
             let Some(state) = ctx.app_handle().try_state::<AppState>() else {
                 responder.respond(
@@ -124,6 +129,12 @@ fn main() {
             let prefs = app::Prefs::load(&data_dir);
             let check_updates = prefs.get().check_updates;
             app.manage(prefs);
+            app.manage(hotkeys::Registered::default());
+            app.manage(scrobble::Scrobbler::load(&data_dir));
+            app.manage(discord::Discord::start(app.state::<app::Prefs>().get().discord));
+            for (action, problem) in hotkeys::apply(app.handle()) {
+                klog!("shortcut for {action}: {problem}");
+            }
             app.manage(app::CacheDirs(vec![cache_dir.join("audio"), data_dir.join("artwork").join("web")]));
             app::build_tray(app)?;
             // Started with Windows: stay in the tray.
@@ -158,6 +169,17 @@ fn main() {
             debug_break_streams,
             app::debug_info,
             app::log_line,
+            lyrics::lyrics,
+            lyrics::lyrics_offset,
+            hotkeys::hotkeys_apply,
+            hotkeys::hotkeys_suspend,
+            scrobble::scrobble_status,
+            scrobble::scrobble_now_playing,
+            scrobble::scrobble,
+            scrobble::lastfm_connect,
+            scrobble::lastfm_disconnect,
+            scrobble::listenbrainz_connect,
+            scrobble::listenbrainz_disconnect,
             search,
             prepare,
             app::tray_tooltip,

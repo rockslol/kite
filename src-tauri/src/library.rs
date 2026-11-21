@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS matches (
     track       TEXT NOT NULL,
     updated_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lyrics (
+    url           TEXT PRIMARY KEY,
+    synced        TEXT,
+    plain         TEXT,
+    instrumental  INTEGER NOT NULL DEFAULT 0,
+    offset_ms     INTEGER NOT NULL DEFAULT 0,
+    fetched_at    INTEGER
+);
+CREATE TABLE IF NOT EXISTS scrobble_queue (
+    id          INTEGER PRIMARY KEY,
+    track       TEXT NOT NULL,
+    started_at  INTEGER NOT NULL
+);
 ";
 
 /// Columns added after the first release. `ALTER TABLE ADD COLUMN` fails if the column
