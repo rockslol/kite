@@ -9,7 +9,7 @@ import { toasts } from "./ui.svelte.js";
 
 const SAVE_KEY = "kite.session";
 const POS_KEY = "kite.position";
-const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
+const TRACK_FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview", "artist_id", "album_id"];
 /** Start loading the next song this many seconds before the current one ends. */
 const PRELOAD_BEFORE_END = 25;
 /** Paused longer than this, a stream song restarts at the same spot instead of resuming the old
@@ -162,6 +162,7 @@ class Player {
 
   /** Replace the queue with `tracks` and play `tracks[i]`. */
   playList(tracks, i) {
+    this.radio = null;
     let items = tracks.map(toItem);
     const chosen = items[i];
     this.#original = items.map((t) => t.key);
@@ -227,6 +228,49 @@ class Player {
   #warmUpcoming() {
     this.warm(this.queue[this.index + 1]);
     this.warm(this.queue[this.index + 2]);
+    if (this.radio && this.queue.length - this.index <= 5) this.#moreRadio();
+  }
+
+  // ---- radio ----------------------------------------------------------------
+
+  /** { title, videoId, playlistId, more } while the queue is a radio that keeps going. */
+  radio = $state(null);
+  #radioBusy = false;
+
+  /** Endless radio from a song, or from an artist's radio playlist. */
+  async startRadio({ track = null, playlistId = null, title }) {
+    try {
+      const r = await invoke("ytm_radio", { videoId: track?.id ?? null, playlistId, more: null });
+      let tracks = r.tracks;
+      if (track) tracks = [track, ...tracks.filter((t) => t.id !== track.id)];
+      if (!tracks.length) return toasts.show("No radio for this one");
+      this.shuffle = false;
+      this.playList(tracks, 0);
+      this.radio = { title, videoId: track?.id ?? null, playlistId, more: r.more };
+      toasts.show(`Radio: ${title}`);
+    } catch (e) {
+      toasts.show(String(e));
+    }
+  }
+
+  /** Nearly at the end of a radio: add the next batch, minus songs already in the queue. */
+  async #moreRadio() {
+    if (this.#radioBusy || !this.radio?.more) return;
+    this.#radioBusy = true;
+    const radio = this.radio;
+    try {
+      const r = await invoke("ytm_radio", { videoId: radio.videoId, playlistId: radio.playlistId, more: radio.more });
+      if (this.radio !== radio) return;
+      const have = new Set(this.queue.map((t) => t.url));
+      const fresh = r.tracks.filter((t) => !have.has(t.url)).map(toItem);
+      this.queue.push(...fresh);
+      this.#original?.push(...fresh.map((t) => t.key));
+      this.radio = { ...radio, more: r.more };
+    } catch {
+      // Try again at the next song.
+    } finally {
+      this.#radioBusy = false;
+    }
   }
 
   /** Resolve a track in the background so it starts faster if it's played. */

@@ -4,6 +4,7 @@
   import { songMenu } from "./menus.js";
   import { artSrc, fmtTime } from "./urls.js";
   import { sound } from "./sound.svelte.js";
+  import { hasPages, openArtist } from "./discover.js";
 
   let { panel = $bindable(), onplay } = $props();
   const toggle = (name) => (panel = panel === name ? "" : name);
@@ -18,7 +19,12 @@
     <span class="art">{#if current?.artwork}<img src={artSrc(current.artwork)} alt="" />{/if}</span>
     <span class="meta">
       <span class="title">{current?.title ?? "Nothing playing"}</span>
-      <span class="artist" class:error={player.error}>{player.error || current?.artist || ""}</span>
+      {#if !player.error && hasPages(current)}
+        <button class="artist link" onclick={() => openArtist(current)}>{current.artist}</button>
+      {:else}
+        <span class="artist" class:error={player.error}>{player.error || current?.artist || ""}</span>
+      {/if}
+      {#if player.radio}<span class="radio">Radio · {player.radio.title}</span>{/if}
     </span>
     {#if current}
       <button
@@ -178,6 +184,22 @@
   .artist {
     color: var(--muted);
     font-size: 13px;
+  }
+  button.artist {
+    text-align: left;
+    max-width: 100%;
+  }
+  .link:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .radio {
+    color: var(--faint);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .artist.error {
     color: var(--error);

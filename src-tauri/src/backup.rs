@@ -298,6 +298,7 @@ mod tests {
             duration: Some(200.0),
             artwork: None,
             preview: false,
+            ..Default::default()
         }
     }
 

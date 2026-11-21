@@ -3,6 +3,7 @@
 import { player } from "./player.svelte.js";
 import { library } from "./library.svelte.js";
 import { menu, nav } from "./ui.svelte.js";
+import { hasPages, openArtist, openAlbum } from "./discover.js";
 
 /**
  * @param list   the list the song is in (for "Play", which plays the list from that song)
@@ -17,6 +18,9 @@ export function songMenu(e, list, index, extra = []) {
     { label: "Add to queue", action: () => player.addToQueue(t) },
     { label: library.isLiked(t) ? "Remove from liked songs" : "Add to liked songs", action: () => library.toggleLike(t) },
     { label: "Add to playlist…", keepOpen: true, action: () => playlistPicker([t]) },
+    ...(t.source === "youtube" ? [{ label: "Start radio", action: () => player.startRadio({ track: t, title: t.title }) }] : []),
+    ...(hasPages(t) ? [{ label: "Go to artist", action: () => openArtist(t) }] : []),
+    ...(hasPages(t) && t.album ? [{ label: "Go to album", action: () => openAlbum(t) }] : []),
     ...extra,
   ]);
 }

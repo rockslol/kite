@@ -6,6 +6,7 @@ mod backup;
 mod import;
 mod hotkeys;
 mod discord;
+mod discover;
 mod library;
 mod log;
 mod lyrics;
@@ -178,6 +179,12 @@ fn main() {
             hotkeys::hotkeys_suspend,
             audio_device::audio_device,
             audio_device::allow_device_names,
+            discover::ytm_artist,
+            discover::ytm_album,
+            discover::ytm_radio,
+            discover::ytm_playlist_songs,
+            discover::ytm_find_artist,
+            discover::ytm_find_album,
             scrobble::scrobble_status,
             scrobble::scrobble_now_playing,
             scrobble::scrobble,

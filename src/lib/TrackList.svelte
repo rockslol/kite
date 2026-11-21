@@ -8,6 +8,7 @@
   import { player } from "./player.svelte.js";
   import { library } from "./library.svelte.js";
   import { songMenu, songsMenu } from "./menus.js";
+  import { hasPages, openArtist, openAlbum } from "./discover.js";
   import { artSrc, fmtTime } from "./urls.js";
 
   let {
@@ -16,6 +17,7 @@
     onmove = null, // (index, toIndex) => void
     onhover = (t) => player.warm(t), // (track) => void; by default the song gets ready to play
     detail = null, // (track) => text shown instead of the duration
+    showAlbum = true, // off on an album's own page, where every row is the same album
   } = $props();
 
   let dragFrom = $state(-1);
@@ -148,7 +150,22 @@
         <span class="art">{#if t.artwork}<img src={artSrc(t.artwork)} alt="" loading="lazy" draggable="false" />{/if}</span>
         <span class="meta">
           <span class="title">{t.title}</span>
-          <span class="artist">{t.artist}{#if t.album && t.album !== t.title}<span class="album">{` · ${t.album}`}</span>{/if}</span>
+          <span class="artist">
+            {#if hasPages(t)}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <span class="link" onclick={(e) => (e.stopPropagation(), openArtist(t))}>{t.artist}</span>
+            {:else}
+              {t.artist}
+            {/if}
+            {#if showAlbum && t.album && t.album !== t.title}
+              <span class="album"
+                >{" · "}{#if hasPages(t)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions --><span
+                    class="link"
+                    onclick={(e) => (e.stopPropagation(), openAlbum(t))}>{t.album}</span
+                  >{:else}{t.album}{/if}</span
+              >
+            {/if}
+          </span>
         </span>
         <button
           class="heart"
@@ -160,7 +177,7 @@
         </button>
         <span class="dur">
           {#if t.preview}<span class="tag" title="SoundCloud Go+ track, only a 30 second preview plays">Preview</span>{/if}
-          {detail ? detail(t) : fmtTime(t.duration)}
+          {detail ? detail(t) : t.duration ? fmtTime(t.duration) : ""}
         </span>
       </div>
     </li>
@@ -247,6 +264,14 @@
   }
   .album {
     color: var(--faint);
+  }
+  .link {
+    cursor: pointer;
+  }
+  .link:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
   .heart {
     display: grid;

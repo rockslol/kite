@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { SvelteSet } from "svelte/reactivity";
 import { nav, toasts } from "./ui.svelte.js";
 
-const FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
+const FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview", "artist_id", "album_id"];
 
 /** Strip UI-only fields (queue keys, item ids) before sending a track to the backend. */
 export const plain = (t) => Object.fromEntries(FIELDS.map((f) => [f, t[f] ?? null]));

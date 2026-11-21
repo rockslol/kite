@@ -6,6 +6,11 @@ What changed in each version of Kite. The newest version is at the top.
 
 ### Discover
 
+- **Artist pages**: top songs (and all of them), albums, singles and EPs, artists fans also like, and a short bio. Click an artist's name anywhere to open it.
+- **Album pages**: every song, play or shuffle the album, or save it as a playlist. Click an album's name to open it.
+- **Radio**: start an endless radio from any song (right-click → Start radio) or from an artist's page. Kite keeps adding songs as you go.
+- **Back** button (also Alt+← and the mouse's back button) for moving between pages.
+
 ## 0.4.1 (2026-11-23)
 
 ### Fixes

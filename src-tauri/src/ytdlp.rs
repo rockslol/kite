@@ -56,7 +56,7 @@ pub enum ToolStatus {
     Error { message: String },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
     pub source: String,
@@ -73,6 +73,12 @@ pub struct Track {
     /// SoundCloud Go+ tracks only play a 30 second preview without a subscription.
     #[serde(default)]
     pub preview: bool,
+    /// YouTube Music page ids, for "Go to artist" and "Go to album". Only songs that came from
+    /// YouTube Music have them; others are looked up by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -505,6 +511,7 @@ fn to_track(source: &str, e: &Value) -> Option<Track> {
         duration: e["duration"].as_f64(),
         preview: source == "soundcloud" && e["duration"].as_f64().is_some_and(|d| (29.0..=31.0).contains(&d)),
         artwork,
+        ..Default::default()
     })
 }
 

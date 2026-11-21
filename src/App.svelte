@@ -21,6 +21,8 @@
   import LocalView from "./views/LocalView.svelte";
   import PlaylistView from "./views/PlaylistView.svelte";
   import SettingsView from "./views/SettingsView.svelte";
+  import ArtistView from "./views/ArtistView.svelte";
+  import AlbumView from "./views/AlbumView.svelte";
   import "./lib/updates.svelte.js";
 
   const SOURCES = [
@@ -73,6 +75,9 @@
       e.preventDefault();
       searchInput?.focus();
       searchInput?.select();
+    } else if (e.altKey && e.key === "ArrowLeft") {
+      e.preventDefault();
+      nav.back();
     } else if (typing) {
       if (e.key === "Escape") e.target.blur();
     } else if (e.key === " ") {
@@ -98,11 +103,18 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} oncontextmenu={(e) => e.target instanceof HTMLInputElement || e.preventDefault()} />
+<svelte:window
+  onmouseup={(e) => e.button === 3 && (e.preventDefault(), nav.back())}
+  onkeydown={onKey} oncontextmenu={(e) => e.target instanceof HTMLInputElement || e.preventDefault()} />
 
 <div class="app">
   <header>
-    <div class="brand">Kite</div>
+    <div class="brand">
+      <button class="back" onclick={() => nav.back()} disabled={!nav.history.length} aria-label="Back" title="Back (Alt+←)">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
+      </button>
+      Kite
+    </div>
     <form class="search" onsubmit={submit}>
       <svg viewBox="0 0 24 24" class="glass" aria-hidden="true">
         <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4 4" />
@@ -146,6 +158,10 @@
         <SettingsView />
       {:else if nav.view.name === "playlist"}
         {#key nav.view.id}<PlaylistView id={nav.view.id} />{/key}
+      {:else if nav.view.name === "artist"}
+        <ArtistView id={nav.view.id} />
+      {:else if nav.view.name === "album"}
+        <AlbumView id={nav.view.id} />
       {:else}
         <SearchView />
       {/if}
@@ -211,6 +227,36 @@
     padding-left: 10px;
     font-weight: 600;
     font-size: 16px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .back {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    margin-left: -8px;
+    border-radius: 8px;
+    color: var(--text);
+  }
+  .back:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  .back:disabled {
+    color: var(--faint);
+    cursor: default;
+  }
+  .back svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   .search {
     position: relative;

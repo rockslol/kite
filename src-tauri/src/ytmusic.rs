@@ -35,7 +35,7 @@ pub async fn search_songs(http: &reqwest::Client, query: &str) -> Result<Vec<Tra
     let mut out = Vec::new();
     for section in sections.as_array().into_iter().flatten() {
         for item in section["musicShelfRenderer"]["contents"].as_array().into_iter().flatten() {
-            if let Some(t) = parse_item(&item["musicResponsiveListItemRenderer"]) {
+            if let Some(t) = crate::discover::parse_search_row(&item["musicResponsiveListItemRenderer"]) {
                 out.push(t);
             }
         }
@@ -43,57 +43,14 @@ pub async fn search_songs(http: &reqwest::Client, query: &str) -> Result<Vec<Tra
     Ok(out)
 }
 
-fn parse_item(r: &Value) -> Option<Track> {
-    let id = r["playlistItemData"]["videoId"].as_str()?.to_string();
-    let col = |i: usize| r["flexColumns"][i]["musicResponsiveListItemFlexColumnRenderer"]["text"]["runs"].as_array();
-    let title: String = col(0)?.iter().filter_map(|x| x["text"].as_str()).collect();
-
-    let mut artists = Vec::new();
-    let mut album = None;
-    let mut duration = None;
-    for run in col(1).into_iter().flatten() {
-        let text = run["text"].as_str().unwrap_or("");
-        let page = run["navigationEndpoint"]["browseEndpoint"]["browseEndpointContextSupportedConfigs"]
-            ["browseEndpointContextMusicConfig"]["pageType"]
-            .as_str();
-        match page {
-            Some("MUSIC_PAGE_TYPE_ARTIST") => artists.push(text.to_string()),
-            Some("MUSIC_PAGE_TYPE_ALBUM") => album = Some(text.to_string()),
-            _ => {
-                if let Some(d) = parse_duration(text.trim()) {
-                    duration = Some(d);
-                }
-            }
-        }
-    }
-    // Some songs list their artist as plain text (no link): take the first run then.
-    if artists.is_empty() {
-        if let Some(first) = col(1).and_then(|c| c.first()).and_then(|x| x["text"].as_str()) {
-            artists.push(first.to_string());
-        }
-    }
-
-    let artwork = r["thumbnail"]["musicThumbnailRenderer"]["thumbnail"]["thumbnails"]
-        .as_array()
-        .and_then(|t| t.last())
-        .and_then(|t| t["url"].as_str())
-        .map(resize_art);
-
-    Some(Track {
-        url: format!("https://www.youtube.com/watch?v={id}"),
-        id,
-        source: "youtube".into(),
-        title,
-        artist: artists.join(", "),
-        album,
-        duration,
-        artwork,
-        preview: false,
-    })
+/// Google image URLs end in size parameters like `=w120-h120-l90-rj`; ask for 300 px.
+#[cfg(test)]
+fn resize_art(url: &str) -> String {
+    resize_art_to(url, 300)
 }
 
-/// Google image URLs end in size parameters like `=w120-h120-l90-rj`; ask for 300 px.
-fn resize_art(url: &str) -> String {
+/// The same, at `size` px.
+pub fn resize_art_to(url: &str, size: u32) -> String {
     match url.rfind("=w") {
         Some(i) => {
             let rest = &url[i + 2..];
@@ -103,7 +60,7 @@ fn resize_art(url: &str) -> String {
                 &tail[digits..]
             });
             match after_h {
-                Some(tail) => format!("{}=w300-h300{tail}", &url[..i]),
+                Some(tail) => format!("{}=w{size}-h{size}{tail}", &url[..i]),
                 None => url.to_string(),
             }
         }
@@ -111,7 +68,7 @@ fn resize_art(url: &str) -> String {
     }
 }
 
-fn parse_duration(s: &str) -> Option<f64> {
+pub fn parse_duration(s: &str) -> Option<f64> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() < 2 || parts.len() > 3 || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) {
         return None;
@@ -256,6 +213,7 @@ mod tests {
             duration: Some(duration),
             artwork: None,
             preview: false,
+            ..Default::default()
         }
     }
     fn want(title: &str, artist: &str, duration: f64) -> Wanted {

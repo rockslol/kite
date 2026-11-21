@@ -110,6 +110,7 @@ pub fn row_track(r: &Row) -> rusqlite::Result<Track> {
         duration: r.get(6)?,
         artwork: r.get(7)?,
         preview: r.get::<_, i64>(8)? != 0,
+        ..Default::default()
     })
 }
 
@@ -802,6 +803,7 @@ mod tests {
             duration: Some(180.0),
             artwork: None,
             preview: false,
+            ..Default::default()
         }
     }
 

@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { player } from "./player.svelte.js";
 import { toasts } from "./ui.svelte.js";
 
-const FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview"];
+const FIELDS = ["id", "source", "url", "title", "artist", "album", "duration", "artwork", "preview", "artist_id", "album_id"];
 
 /** Parses LRC text into `[{ t, text }]` sorted by time, plus the file's own `[offset:]` in ms. */
 export function parseLrc(text) {

@@ -4,7 +4,23 @@ class Nav {
   /** { name: "search" | "liked" | "history" | "local" | "playlist", id?: number } */
   view = $state(JSON.parse(localStorage.getItem("kite.view") || '{"name":"search"}'));
 
+  /** Earlier pages, for Back. */
+  history = $state([]);
+
   go(view) {
+    const same = view.name === this.view.name && view.id === this.view.id;
+    if (!same) this.history = [...this.history.slice(-49), this.view];
+    this.#show(view);
+  }
+
+  back() {
+    const prev = this.history.at(-1);
+    if (!prev) return;
+    this.history = this.history.slice(0, -1);
+    this.#show(prev);
+  }
+
+  #show(view) {
     this.view = view;
     localStorage.setItem("kite.view", JSON.stringify(view));
   }

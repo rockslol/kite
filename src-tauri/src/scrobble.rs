@@ -356,6 +356,7 @@ mod tests {
             duration: Some(135.0),
             artwork: None,
             preview: false,
+            ..Default::default()
         };
         let l = listenbrainz_listen(&t, Some(1_800_000_000));
         assert_eq!(l["listened_at"], 1_800_000_000);
