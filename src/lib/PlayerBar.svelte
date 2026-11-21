@@ -3,6 +3,7 @@
   import { library } from "./library.svelte.js";
   import { songMenu } from "./menus.js";
   import { artSrc, fmtTime } from "./urls.js";
+  import { sound } from "./sound.svelte.js";
 
   let { panel = $bindable(), onplay } = $props();
   const toggle = (name) => (panel = panel === name ? "" : name);
@@ -96,6 +97,14 @@
   </div>
 
   <div class="right">
+    <button class="icon small dot" class:on={panel === "sound"} class:active={sound.active || player.sleep} onclick={() => toggle("sound")} aria-label="Sound" title="Sound (E)">
+      <svg viewBox="0 0 24 24">
+        <path d="M6 4v16M12 4v16M18 4v16" class="stroke" />
+        <circle cx="6" cy="14" r="2.2" />
+        <circle cx="12" cy="8" r="2.2" />
+        <circle cx="18" cy="15" r="2.2" />
+      </svg>
+    </button>
     <button class="icon small" class:on={panel === "lyrics"} onclick={() => toggle("lyrics")} aria-label="Lyrics" title="Lyrics (Y)">
       <svg viewBox="0 0 24 24">
         <rect x="9" y="3.5" width="6" height="10.5" rx="3" class="stroke" />
@@ -214,6 +223,20 @@
     height: 32px;
     border-radius: 50%;
     color: var(--text);
+  }
+  /* A small dot when sound effects or the sleep timer are on. */
+  .icon.dot {
+    position: relative;
+  }
+  .icon.dot.active::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text);
   }
   .icon svg {
     width: 20px;

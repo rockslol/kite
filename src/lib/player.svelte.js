@@ -64,6 +64,12 @@ class Player {
   #scrobbled = false;
   #startedAt = 0; // unix seconds when this song started
   #pausedAt = 0;
+  #onPlay = [];
+  /** Sleep timer: { until: ms, minutes } or { endOfSong: true }, or null. */
+  sleep = $state(null);
+  sleepLeft = $state(0); // seconds, for the countdown
+  #fade = $state(1); // volume factor while the timer fades out
+  #sleepTick = null;
   #warmToken = 0;
   #warming = null; // the list warmList is working through
   #shuffleStart = new WeakMap(); // list → the song Shuffle will start with, picked (and prepared) ahead
@@ -79,8 +85,8 @@ class Player {
 
     $effect.root(() => {
       $effect(() => {
-        this.#audio.volume = this.volume;
-        this.#standby.volume = this.volume;
+        this.#audio.volume = this.volume * this.#fade;
+        this.#standby.volume = this.volume * this.#fade;
       });
       $effect(() => this.#save());
     });
@@ -258,7 +264,36 @@ class Player {
     this.#media("paused");
   }
 
+  /** Stop after `minutes`, at the end of this song ("song"), or never (null). */
+  setSleep(when) {
+    clearInterval(this.#sleepTick);
+    this.#fade = 1;
+    this.sleepLeft = 0;
+    if (!when) return void (this.sleep = null);
+    if (when === "song") return void (this.sleep = { endOfSong: true });
+    this.sleep = { until: Date.now() + when * 60_000, minutes: when };
+    const tick = () => {
+      const left = (this.sleep?.until - Date.now()) / 1000;
+      this.sleepLeft = Math.max(0, Math.ceil(left));
+      // The last 10 seconds fade out, then playback pauses.
+      this.#fade = Math.max(0, Math.min(1, left / 10));
+      if (left <= 0) {
+        if (this.playing) this.#audio.pause();
+        this.setSleep(null);
+      }
+    };
+    tick();
+    this.#sleepTick = setInterval(tick, 250);
+  }
+
   next(auto = false) {
+    if (auto && this.sleep?.endOfSong) {
+      // Sleep timer set to the end of the song: stop here instead of going on.
+      this.setSleep(null);
+      this.playing = false;
+      this.#media("paused");
+      return;
+    }
     if (auto && this.repeat === "one") {
       this.#audio.currentTime = 0;
       this.#audio.play();
@@ -303,6 +338,40 @@ class Player {
     if (!import.meta.env.DEV) return null;
     this.#pausedAt -= ms;
     return this.#audio;
+  }
+
+  // ---- hooks for the sound engine ------------------------------------------
+
+  /** Both audio elements (the playing one and the standby). */
+  audioElements() {
+    return [this.#audio, this.#standby];
+  }
+
+  /** Speed, and whether pitch follows it ("slowed" and "nightcore" don't keep pitch). */
+  setRate(speed, keepPitch) {
+    for (const a of [this.#audio, this.#standby]) {
+      a.defaultPlaybackRate = speed;
+      a.playbackRate = speed;
+      a.preservesPitch = keepPitch;
+    }
+  }
+
+  onPlay(fn) {
+    this.#onPlay.push(fn);
+  }
+
+  /** Web Audio can only hear streams fetched with CORS. Switching reloads the current song
+   *  once, at the same spot. */
+  useCors() {
+    if (this.#audio.crossOrigin === "anonymous") return;
+    this.#clearStandby();
+    for (const a of [this.#audio, this.#standby]) a.crossOrigin = "anonymous";
+    if (!this.#audio.getAttribute("src") || !this.current) return;
+    const at = this.#audio.currentTime;
+    if (!this.#audio.paused) return void this.#playAt(this.index, at, true);
+    this.#audio.removeAttribute("src");
+    this.#audio.load();
+    this.#resumeAt = at;
   }
 
   // ---- internals ---------------------------------------------------------
@@ -437,6 +506,7 @@ class Player {
     const active = () => a === this.#audio;
     a.addEventListener("playing", () => {
       if (!active()) return;
+      for (const fn of this.#onPlay) fn();
       this.playing = true;
       this.loading = false;
       this.#media("playing");

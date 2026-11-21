@@ -10,6 +10,8 @@
   import PlayerBar from "./lib/PlayerBar.svelte";
   import QueuePanel from "./lib/QueuePanel.svelte";
   import LyricsPanel from "./lib/LyricsPanel.svelte";
+  import SoundPanel from "./lib/SoundPanel.svelte";
+  import "./lib/sound.svelte.js"; // applies saved sound settings at startup
   import ContextMenu from "./lib/ContextMenu.svelte";
   import ImportDialog from "./lib/ImportDialog.svelte";
   import { importer } from "./lib/importer.svelte.js";
@@ -88,6 +90,8 @@
       togglePanel("queue");
     } else if (e.key === "y" && !e.ctrlKey) {
       togglePanel("lyrics");
+    } else if (e.key === "e" && !e.ctrlKey) {
+      togglePanel("sound");
     } else if (e.key === "l" && !e.ctrlKey && player.current) {
       library.toggleLike(player.current);
     }
@@ -150,6 +154,8 @@
       <QueuePanel />
     {:else if panel === "lyrics"}
       <LyricsPanel />
+    {:else if panel === "sound"}
+      <SoundPanel />
     {/if}
   </div>
 
