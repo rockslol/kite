@@ -2,7 +2,7 @@
 
 What changed in each version of Kite. The newest version is at the top.
 
-## Unreleased
+## 0.2.0 (2026-11-21)
 
 ### Play
 
@@ -20,6 +20,10 @@ What changed in each version of Kite. The newest version is at the top.
 - **Undo**: deleting a playlist, removing songs from a playlist and clearing the queue now show an **Undo** button for a few seconds. Deleting a playlist no longer asks you to confirm first.
 - **Music folders are watched** while Kite runs: songs you add, rename, move or delete show up in Local files within a few seconds, no restart or Rescan needed.
 - **Back up or move your library** (Settings → Library): export liked songs, playlists, history and music folders to one file, and import it on another PC. Importing adds what's missing and keeps what you have, so importing twice is safe.
+
+### macOS
+
+- **Kite now runs on macOS 11 and later**, Apple Silicon and Intel, in one download. It isn't notarized by Apple yet, so the first time, right-click Kite in Applications and choose **Open**.
 
 ### Help
 

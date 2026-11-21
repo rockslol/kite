@@ -4,7 +4,7 @@
 
 **Small, open-source music player for YouTube Music, YouTube, SoundCloud, and local files.**
 
-[![Release](https://img.shields.io/github/v/release/rockslol/kite?style=flat-square&label=release&labelColor=0d0d10&color=f2f2f2)](https://github.com/rockslol/kite/releases) [![Downloads](https://img.shields.io/github/downloads/rockslol/kite/total?style=flat-square&label=downloads&labelColor=0d0d10&color=c8c8ce)](https://github.com/rockslol/kite/releases) [![Platform](https://img.shields.io/badge/platform-Windows-9a9aa2?style=flat-square&labelColor=0d0d10)](https://github.com/rockslol/kite/releases) [![Installer](https://img.shields.io/badge/installer-3.5%20MB-6e6e76?style=flat-square&labelColor=0d0d10)](https://github.com/rockslol/kite/releases/latest) [![License](https://img.shields.io/badge/license-MIT-4a4a52?style=flat-square&labelColor=0d0d10)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/rockslol/kite?style=flat-square&label=release&labelColor=0d0d10&color=f2f2f2)](https://github.com/rockslol/kite/releases) [![Downloads](https://img.shields.io/github/downloads/rockslol/kite/total?style=flat-square&label=downloads&labelColor=0d0d10&color=c8c8ce)](https://github.com/rockslol/kite/releases) [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-9a9aa2?style=flat-square&labelColor=0d0d10)](https://github.com/rockslol/kite/releases) [![Installer](https://img.shields.io/badge/installer-3.6%20MB-6e6e76?style=flat-square&labelColor=0d0d10)](https://github.com/rockslol/kite/releases/latest) [![License](https://img.shields.io/badge/license-MIT-4a4a52?style=flat-square&labelColor=0d0d10)](./LICENSE)
 
 [Overview](#overview) • [Features](#features) • [Screenshots](#screenshots) • [Architecture](#architecture) • [Getting Started](#getting-started) • [Building](#building) • [macOS Notes](#macos-notes) • [Contributing](#contributing) • [License](#license)
 
@@ -18,7 +18,7 @@
 
 ## Overview
 
-Kite is a desktop music player for Windows (macOS coming). It streams from YouTube Music, YouTube, and SoundCloud, plays your own music files, and brings in your playlists from Spotify and Deezer.
+Kite is a desktop music player for Windows and macOS. It streams from YouTube Music, YouTube, and SoundCloud, plays your own music files, and brings in your playlists from Spotify and Deezer.
 
 It's built with Tauri, so it uses the webview Windows already has instead of shipping its own browser: a 3.5 MB installer, about 160 MB of memory while playing, and almost no CPU in the tray.
 
@@ -72,15 +72,20 @@ kite/
 │   └── src/
 │       ├── main.rs             # App setup and kite:// routing
 │       ├── ytdlp.rs            # yt-dlp and JS runtime: download, verify, update, search, resolve
-│       ├── stream.rs           # Audio streaming with range requests and an HLS cache
+│       ├── stream.rs           # Audio streaming with range requests, saved stream links, an HLS cache
 │       ├── ytmusic.rs          # YouTube Music search and song matching
 │       ├── import.rs           # Spotify, Deezer, YouTube, and SoundCloud imports
 │       ├── library.rs          # SQLite library: likes, playlists, history
 │       ├── local.rs            # Music folder scanner (tags and artwork)
+│       ├── watch.rs            # Watches music folders for changes while Kite runs
+│       ├── backup.rs           # Library export and import
+│       ├── log.rs              # Local log file for "Copy debug info"
 │       ├── media.rs            # System media controls
 │       ├── titles.rs           # Cleans YouTube titles into song and artist
 │       └── app.rs              # Settings, tray, updates, cache
 ├── release/publish.py          # Publishes a release to GitHub
+├── CHANGELOG.md                # What changed in each version
+├── CONTRIBUTING.md             # How to help
 ├── docs/                       # README images
 └── LICENSE
 ```
@@ -124,7 +129,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Pre-built installers for Windows are available on [Releases](https://github.com/rockslol/kite/releases).
+Pre-built installers for Windows and macOS are available on [Releases](https://github.com/rockslol/kite/releases).
 
 ---
 

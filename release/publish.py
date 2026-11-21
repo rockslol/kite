@@ -2,7 +2,8 @@
 
 Expects, done beforehand:
 - main at the release commit and the tag (e.g. v0.1.0) created locally,
-- release/<tag>/ holding the installer, its .sig, latest.json and notes.md.
+- release/<tag>/ holding the installer, its .sig, latest.json and notes.md, plus any other
+  files to attach (the macOS DMG and the .app.tar.gz the macOS updater downloads).
 
 Creates the public GitHub repo if it doesn't exist yet, pushes main and the tag, creates the
 release with the Git Credential Manager token (never printed or saved), uploads the files, and
@@ -46,6 +47,11 @@ def main():
     missing = [f for f in files + ["notes.md"] if not (DIR / f).exists()]
     if missing:
         raise RuntimeError(f"missing in {DIR}: {', '.join(missing)}")
+    files += sorted(p.name for p in DIR.iterdir() if p.is_file() and p.name not in files + ["notes.md"])
+    # Every download the updater points at must be one of the files being attached.
+    for platform, entry in json.loads((DIR / "latest.json").read_text(encoding="utf-8"))["platforms"].items():
+        if entry["url"].rsplit("/", 1)[-1] not in files:
+            raise RuntimeError(f"latest.json {platform} points at a file that isn't attached: {entry['url']}")
     if git("rev-parse", "main") != git("rev-parse", f"{TAG}^{{commit}}"):
         raise RuntimeError(f"main isn't at {TAG}")
     if json.loads((DIR / "latest.json").read_text(encoding="utf-8"))["version"] != VERSION:
