@@ -101,6 +101,21 @@
     moving = false;
   }
 
+  async function copyDebugInfo() {
+    const text = await invoke("debug_info").catch((e) => String(e));
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Older webviews: copy through a hidden text box.
+      const box = Object.assign(document.createElement("textarea"), { value: text });
+      document.body.append(box);
+      box.select();
+      document.execCommand("copy");
+      box.remove();
+    }
+    toasts.show("Debug info copied. Paste it into your bug report.");
+  }
+
   function size(b) {
     if (b === null) return "…";
     if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
@@ -214,6 +229,13 @@
       <div class="row">
         <div><p class="label">Check for updates automatically</p><p class="hint">Kite looks once, shortly after it starts.</p></div>
         {@render toggle(s.check_updates, (v) => save({ check_updates: v }), "Check for updates automatically")}
+      </div>
+      <div class="row">
+        <div>
+          <p class="label">Debug info</p>
+          <p class="hint">Your Kite and yt-dlp versions, library size and recent problems, for a bug report. Nothing is sent anywhere.</p>
+        </div>
+        <button class="btn" onclick={copyDebugInfo}>Copy debug info</button>
       </div>
     </section>
   {/if}

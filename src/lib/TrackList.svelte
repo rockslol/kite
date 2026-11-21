@@ -14,7 +14,7 @@
     tracks,
     extraMenu = null, // (tracks) => extra menu items, for one song or a selection
     onmove = null, // (index, toIndex) => void
-    onhover = null, // (track) => void
+    onhover = (t) => player.warm(t), // (track) => void; by default the song gets ready to play
     detail = null, // (track) => text shown instead of the duration
   } = $props();
 

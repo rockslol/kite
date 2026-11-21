@@ -1,6 +1,8 @@
 <script>
+  import { onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import TrackList from "../lib/TrackList.svelte";
+  import { player } from "../lib/player.svelte.js";
   import { library } from "../lib/library.svelte.js";
   import { menu } from "../lib/ui.svelte.js";
   import { plural } from "../lib/urls.js";
@@ -14,6 +16,9 @@
   let tracks = $state([]);
   let loaded = $state(false);
 
+  let warmed = null; // the list handed to warmList, to stop it when this page closes
+  onDestroy(() => player.stopWarming(warmed));
+
   $effect(() => {
     library.version;
     const order = mode;
@@ -21,6 +26,8 @@
     invoke("lib_history", { order, limit: 200 }).then((t) => {
       if (order !== mode) return;
       tracks = t;
+      // Only on opening: refetches after a like or an edit shouldn't start more lookups.
+      if (!loaded) player.warmList((warmed = tracks));
       loaded = true;
     });
   });

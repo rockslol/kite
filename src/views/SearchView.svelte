@@ -26,7 +26,7 @@
     margin: 4px 8px 10px;
   }
 </style>
-    <TrackList tracks={search.results} onhover={(t) => player.warm(t)} />
+    <TrackList tracks={search.results} />
   {:else if search.searchedFor && !search.searching}
     <p class="empty">Nothing found for "{search.searchedFor}".</p>
   {:else if !search.searching}

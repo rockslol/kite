@@ -4,6 +4,7 @@ mod app;
 mod backup;
 mod import;
 mod library;
+mod log;
 mod local;
 mod media;
 mod stream;
@@ -42,7 +43,7 @@ async fn search(state: State<'_, AppState>, source: String, query: String) -> Re
             Ok(found) if !found.is_empty() => return Ok(found),
             Ok(_) => return Ok(vec![]),
             // YouTube Music changed something: fall back to plain YouTube search.
-            Err(e) => eprintln!("[kite] YouTube Music search failed, using YouTube: {e}"),
+            Err(e) => klog!("YouTube Music search failed, using YouTube: {e}"),
         }
         return state.yt.search("youtube", query).await;
     }
@@ -118,6 +119,8 @@ fn main() {
                 let _ = std::fs::rename(&old_dir, &data_dir);
             }
             std::fs::create_dir_all(&data_dir)?;
+            log::init(app.path().app_log_dir().unwrap_or_else(|_| data_dir.join("logs")));
+            klog!("Kite {} started", app.package_info().version);
             let prefs = app::Prefs::load(&data_dir);
             let check_updates = prefs.get().check_updates;
             app.manage(prefs);
@@ -153,6 +156,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             tool_status,
             debug_break_streams,
+            app::debug_info,
+            app::log_line,
             search,
             prepare,
             app::tray_tooltip,

@@ -10,6 +10,8 @@ What changed in each version of Kite. The newest version is at the top.
 - **No gaps between songs.** Kite loads the next song before the current one ends, and **Next** is instant.
 - **Songs that can't play are skipped** with a short message, instead of stopping the queue.
 - **Play all** and **Shuffle** for search results.
+- **Songs in playlists start faster.** Opening a playlist, liked songs or history prepares the first songs (and the one Shuffle will start with), hovering a song prepares it, the next two songs in the queue are always ready, and songs Kite looked up in the last few hours start right away, even after a restart.
+- **Fewer slow starts.** About one YouTube link in ten never starts working. Kite now checks each link before playing it and gets a new one right away, instead of waiting it out.
 - **Resuming after a long pause just works.** A song paused for more than 20 minutes (or one whose stream dropped mid-song) picks up where it was, instead of failing or skipping.
 
 ### Library
@@ -18,6 +20,10 @@ What changed in each version of Kite. The newest version is at the top.
 - **Undo**: deleting a playlist, removing songs from a playlist and clearing the queue now show an **Undo** button for a few seconds. Deleting a playlist no longer asks you to confirm first.
 - **Music folders are watched** while Kite runs: songs you add, rename, move or delete show up in Local files within a few seconds, no restart or Rescan needed.
 - **Back up or move your library** (Settings → Library): export liked songs, playlists, history and music folders to one file, and import it on another PC. Importing adds what's missing and keeps what you have, so importing twice is safe.
+
+### Help
+
+- **Copy debug info** (Settings → About): your Kite and yt-dlp versions, library size and recent problems, ready to paste into a bug report. Kite keeps a small log file for this. Nothing is sent anywhere.
 
 ## 0.1.0 (2026-11-20)
 

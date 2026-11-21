@@ -9,6 +9,7 @@ use percent_encoding::percent_decode_str;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tauri::http::{header, Request, Response, StatusCode};
 use tokio::sync::OnceCell;
@@ -16,17 +17,58 @@ use tokio::sync::OnceCell;
 /// Largest piece fetched from the upstream server per request. The audio element asks for the
 /// next piece as it plays.
 const CHUNK: u64 = 2 * 1024 * 1024;
-/// Stream URLs expire upstream (YouTube's after about 6 hours); resolve again well before that.
-const TTL: Duration = Duration::from_secs(60 * 60);
+/// How long a stream link is trusted when it doesn't say when it expires.
+const TTL: u64 = 60 * 60;
+/// Links that do say (YouTube's `expire=`, about 6 hours out) are resolved again this long before.
+const EXPIRY_MARGIN: u64 = 30 * 60;
+/// A fresh YouTube link is refused for a moment (measured: working 1.8-2.9 s after yt-dlp
+/// returns). One still refused this long after is one that never works: get another.
+const LINK_DEADLINE: Duration = Duration::from_millis(4500);
 
 enum Source {
-    Remote { url: String, headers: Vec<(String, String)>, mime: &'static str, available_at: Option<u64> },
+    Remote {
+        url: String,
+        headers: Vec<(String, String)>,
+        mime: &'static str,
+        available_at: Option<u64>,
+        /// Fresh links only: when to stop waiting for the link to start working.
+        give_up: Option<Instant>,
+    },
     File { path: PathBuf, mime: &'static str },
 }
 
 struct Entry {
     source: Source,
-    at: Instant,
+    /// Unix seconds after which a remote link is resolved again.
+    fresh_until: u64,
+}
+
+/// A resolved link kept on disk, so songs played or prepared earlier start right away after
+/// a restart too (until the link expires).
+#[derive(Serialize, Deserialize, Clone)]
+struct SavedLink {
+    url: String,
+    headers: Vec<(String, String)>,
+    ext: String,
+    available_at: Option<u64>,
+    fresh_until: u64,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// When a link stops being trusted: from its own `expire=` (YouTube), else an hour from now.
+/// The second value says whether the link stated its expiry (only those are saved to disk).
+fn fresh_until(url: &str) -> (u64, bool) {
+    let expire = url
+        .split(['?', '&'])
+        .find_map(|p| p.strip_prefix("expire="))
+        .and_then(|v| v.parse::<u64>().ok());
+    match expire {
+        Some(e) => (e.saturating_sub(EXPIRY_MARGIN), true),
+        None => (unix_now() + TTL, false),
+    }
 }
 
 type Slot = Arc<OnceCell<Result<Arc<Entry>, String>>>;
@@ -38,16 +80,59 @@ pub struct Streams {
     slots: Mutex<HashMap<String, Slot>>,
     /// Caps parallel yt-dlp runs, since the UI resolves songs ahead on hover.
     resolving: tokio::sync::Semaphore,
+    links_file: PathBuf,
+    saved: Mutex<HashMap<String, SavedLink>>,
 }
 
 impl Streams {
     pub fn new(yt: Arc<YtDlp>, http: reqwest::Client, cache_dir: PathBuf) -> Self {
+        let links_file = cache_dir.join("links.json");
+        // Links that still have a while to live, from earlier runs.
+        let soon = unix_now() + 60;
+        let saved: HashMap<String, SavedLink> = std::fs::read(&links_file)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<HashMap<String, SavedLink>>(&b).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, l)| l.fresh_until > soon)
+            .collect();
+        let slots = saved
+            .iter()
+            .map(|(page, l)| {
+                let entry = Entry {
+                    source: Source::Remote {
+                        url: l.url.clone(),
+                        headers: l.headers.clone(),
+                        mime: mime_for(&l.ext),
+                        available_at: l.available_at,
+                        give_up: None,
+                    },
+                    fresh_until: l.fresh_until,
+                };
+                (page.clone(), Arc::new(OnceCell::new_with(Some(Ok(Arc::new(entry))))))
+            })
+            .collect();
         Self {
             yt,
             http,
             cache_dir: cache_dir.join("audio"),
-            slots: Mutex::new(HashMap::new()),
+            slots: Mutex::new(slots),
             resolving: tokio::sync::Semaphore::new(4),
+            links_file,
+            saved: Mutex::new(saved),
+        }
+    }
+
+    /// Writes the saved links (dropping expired ones). Small file, written whole.
+    fn save_links(&self, change: impl FnOnce(&mut HashMap<String, SavedLink>)) {
+        let mut saved = self.saved.lock().unwrap();
+        change(&mut saved);
+        let now = unix_now();
+        saved.retain(|_, l| l.fresh_until > now);
+        let Ok(json) = serde_json::to_vec(&*saved) else { return };
+        let tmp = self.links_file.with_extension("json.part");
+        if std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &self.links_file)).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 
@@ -63,7 +148,7 @@ impl Streams {
                 // Cached files stay valid until the file is gone (Settings → Clear cache).
                 Some(Ok(e)) => match &e.source {
                     Source::File { path, .. } => path.exists(),
-                    Source::Remote { .. } => e.at.elapsed() < TTL,
+                    Source::Remote { .. } => unix_now() < e.fresh_until,
                 },
                 Some(Err(_)) => false,
                 None => true,
@@ -87,7 +172,7 @@ impl Streams {
         let mut n = 0;
         for slot in self.slots.lock().unwrap().values_mut() {
             let Some(Ok(e)) = slot.get() else { continue };
-            let Source::Remote { url, headers, mime, available_at } = &e.source else { continue };
+            let Source::Remote { url, headers, mime, available_at, give_up } = &e.source else { continue };
             // `expire` is covered by the signature, so changing it makes the server refuse the link.
             let broken = Entry {
                 source: Source::Remote {
@@ -95,8 +180,9 @@ impl Streams {
                     headers: headers.clone(),
                     mime,
                     available_at: *available_at,
+                    give_up: *give_up,
                 },
-                at: e.at,
+                fresh_until: e.fresh_until,
             };
             *slot = Arc::new(OnceCell::new_with(Some(Ok(Arc::new(broken)))));
             n += 1;
@@ -104,33 +190,87 @@ impl Streams {
         n
     }
 
+    /// How many resolved links are saved for later runs.
+    pub fn saved_count(&self) -> usize {
+        self.saved.lock().unwrap().len()
+    }
+
     fn forget(&self, page_url: &str) {
         self.slots.lock().unwrap().remove(page_url);
+        if self.saved.lock().unwrap().contains_key(page_url) {
+            self.save_links(|s| {
+                s.remove(page_url);
+            });
+        }
     }
 
     async fn load(&self, page_url: &str) -> Result<Arc<Entry>, String> {
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let (entry, link) = self.resolve_once(page_url).await?;
+            let Source::Remote { url, headers, mime, available_at, give_up } = &entry.source else { return Ok(entry) };
+            // Check the link with a 1-byte read, so a song that was prepared ahead really starts
+            // right away, and a link that never works is replaced before anyone presses play.
+            if self.proxy(url, headers, mime, *available_at, *give_up, Some((0, Some(0)))).await.is_ok() {
+                if let Some(link) = link {
+                    self.save_links(|s| {
+                        s.insert(page_url.to_string(), link);
+                    });
+                }
+                return Ok(entry);
+            }
+            crate::klog!("stream link for {page_url} never started working (try {tries})");
+            if tries == 2 {
+                // Hand it over anyway: playing it retries once more.
+                return Ok(entry);
+            }
+        }
+    }
+
+    /// One yt-dlp lookup. Returns the entry, and the link to save for later runs if it says
+    /// when it expires.
+    async fn resolve_once(&self, page_url: &str) -> Result<(Arc<Entry>, Option<SavedLink>), String> {
+        let started = Instant::now();
         let r = {
             let _permit = self.resolving.acquire().await.map_err(|e| e.to_string())?;
-            self.yt.resolve(page_url).await?
+            self.yt.resolve(page_url).await.map_err(|e| {
+                crate::klog!("couldn't find a stream for {page_url}: {e}");
+                e
+            })?
         };
-        let source = if r.hls {
+        crate::klog!("resolved {page_url} in {:.1} s ({})", started.elapsed().as_secs_f32(), r.ext);
+        if r.hls {
             tokio::fs::create_dir_all(&self.cache_dir).await.map_err(|e| e.to_string())?;
             let stem = self.cache_dir.join(cache_key(page_url));
             let path = self.yt.download(page_url, &stem).await?;
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
-            Source::File { path, mime: mime_for(&ext) }
-        } else {
-            Source::Remote { url: r.url, headers: r.headers, mime: mime_for(&r.ext), available_at: r.available_at }
+            return Ok((Arc::new(Entry { source: Source::File { path, mime: mime_for(&ext) }, fresh_until: u64::MAX }), None));
+        }
+        let (fresh, stated) = fresh_until(&r.url);
+        let link = stated.then(|| SavedLink {
+            url: r.url.clone(),
+            headers: r.headers.clone(),
+            ext: r.ext.clone(),
+            available_at: r.available_at,
+            fresh_until: fresh,
+        });
+        let source = Source::Remote {
+            url: r.url,
+            headers: r.headers,
+            mime: mime_for(&r.ext),
+            available_at: r.available_at,
+            give_up: Some(Instant::now() + LINK_DEADLINE),
         };
-        Ok(Arc::new(Entry { source, at: Instant::now() }))
+        Ok((Arc::new(Entry { source, fresh_until: fresh }), link))
     }
 
     pub async fn handle(&self, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
         let resp = self.handle_inner(&req).await;
         let status = resp.status();
         if !status.is_success() {
-            eprintln!(
-                "[kite] {} {} -> {status}: {}",
+            crate::klog!(
+                "stream {} {} -> {status}: {}",
                 req.uri(),
                 req.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("-"),
                 String::from_utf8_lossy(resp.body())
@@ -161,8 +301,8 @@ impl Streams {
             };
             let result = match &entry.source {
                 Source::File { path, mime } => return serve_path(path, mime, range).await,
-                Source::Remote { url, headers, mime, available_at } => {
-                    self.proxy(url, headers, mime, *available_at, range).await
+                Source::Remote { url, headers, mime, available_at, give_up } => {
+                    self.proxy(url, headers, mime, *available_at, *give_up, range).await
                 }
             };
             match result {
@@ -181,6 +321,7 @@ impl Streams {
         headers: &[(String, String)],
         mime: &str,
         available_at: Option<u64>,
+        give_up: Option<Instant>,
         range: Option<(u64, Option<u64>)>,
     ) -> Result<Response<Vec<u8>>, String> {
         let (start, end) = range.unwrap_or((0, None));
@@ -189,8 +330,8 @@ impl Streams {
         // YouTube refuses fresh URLs with 403 for a few seconds. `available_at` is the official
         // time, but URLs measured working ~2 s after resolving while `available_at` said ~5 s.
         // So try right away and retry 403s quickly until a little past `available_at`.
-        let unix_now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        let ready = available_at.map(|t| Duration::from_secs(t));
+        let now = || Duration::from_secs(unix_now());
+        let ready = available_at.map(Duration::from_secs);
 
         let mut tries = 0;
         let resp = loop {
@@ -204,7 +345,8 @@ impl Streams {
                 .await
                 .map_err(|e| e.to_string())?;
             // Some URLs never become usable; past this point a fresh URL is the faster way out.
-            let in_grace = ready.is_some_and(|r| unix_now() < r + Duration::from_secs(2));
+            let in_grace = ready.is_some_and(|r| now() < r + Duration::from_secs(2))
+                && give_up.is_none_or(|d| Instant::now() < d);
             if resp.status() == reqwest::StatusCode::FORBIDDEN && in_grace && tries < 60 {
                 tries += 1;
                 tokio::time::sleep(Duration::from_millis(300)).await;
@@ -328,7 +470,38 @@ pub(crate) fn text(status: StatusCode, msg: &str) -> Response<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_range;
+    use super::*;
+
+    #[test]
+    fn links_are_trusted_until_shortly_before_they_expire() {
+        let (t, stated) = fresh_until("https://rr1.googlevideo.com/videoplayback?expire=1800000000&ei=x&ip=1.2.3.4");
+        assert_eq!((t, stated), (1_800_000_000 - EXPIRY_MARGIN, true));
+        let (t, stated) = fresh_until("https://cf-media.sndcdn.com/abc.mp3?Policy=x");
+        assert!(!stated && t > unix_now() + TTL - 5);
+    }
+
+    /// Links resolved in one run are there in the next, and expired ones aren't.
+    #[test]
+    fn saved_links_survive_a_restart() {
+        let dir = std::env::temp_dir().join(format!("kite-links-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let new = || Streams::new(Arc::new(YtDlp::new(&dir.join("bin"), &dir)), reqwest::Client::new(), dir.clone());
+        let link = |until| SavedLink { url: "https://x/v?expire=1".into(), headers: vec![], ext: "webm".into(), available_at: None, fresh_until: until };
+        let s = new();
+        s.save_links(|m| {
+            m.insert("https://www.youtube.com/watch?v=live".into(), link(unix_now() + 3600));
+            m.insert("https://www.youtube.com/watch?v=old".into(), link(unix_now() + 30));
+        });
+        let s2 = new();
+        let slots = s2.slots.lock().unwrap();
+        assert!(slots.contains_key("https://www.youtube.com/watch?v=live"));
+        assert!(!slots.contains_key("https://www.youtube.com/watch?v=old"), "less than a minute left: resolve again");
+        drop(slots);
+        s2.forget("https://www.youtube.com/watch?v=live");
+        assert!(new().slots.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_ranges_and_rejects_backwards_ones() {

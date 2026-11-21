@@ -154,6 +154,55 @@ pub fn autostart_set(app: AppHandle, enabled: bool) -> Result<bool, String> {
     al.is_enabled().map_err(|e| e.to_string())
 }
 
+// ---- debug info ---------------------------------------------------------------
+
+/// A line from the interface (a song that couldn't play, …) for the log file.
+#[tauri::command]
+pub fn log_line(text: String) {
+    crate::klog!("{}", text.chars().take(500).collect::<String>());
+}
+
+/// Everything useful for a bug report, as text the user copies. The user's home folder is
+/// replaced with `~`, so their account name isn't in it.
+#[tauri::command]
+pub fn debug_info(app: AppHandle, state: State<'_, AppState>) -> String {
+    let tools = state.yt.info();
+    let counts = state
+        .library
+        .with(|c| {
+            let n = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+            Ok(format!(
+                "{} songs ({} local), {} liked, {} playlists, {} plays, {} music folders",
+                n("SELECT COUNT(*) FROM tracks")?,
+                n("SELECT COUNT(*) FROM tracks WHERE source = 'local'")?,
+                n("SELECT COUNT(*) FROM likes")?,
+                n("SELECT COUNT(*) FROM playlists")?,
+                n("SELECT COUNT(*) FROM plays")?,
+                n("SELECT COUNT(*) FROM folders")?,
+            ))
+        })
+        .unwrap_or_else(|e| format!("library unreadable: {e}"));
+    let mut out = format!(
+        "Kite {} ({} {})\nyt-dlp {} · JavaScript runtime: {}\nLibrary: {}\nSaved stream links: {}\n\nRecent log:\n{}\n",
+        app.package_info().version,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        if tools.ytdlp_version.is_empty() { "not installed" } else { &tools.ytdlp_version },
+        if tools.js_runtime.is_empty() { "none" } else { &tools.js_runtime },
+        counts,
+        state.streams.saved_count(),
+        crate::log::tail(150).join("\n"),
+    );
+    for var in ["USERPROFILE", "HOME"] {
+        if let Ok(home) = std::env::var(var) {
+            if home.len() > 3 {
+                out = out.replace(&home, "~");
+            }
+        }
+    }
+    out
+}
+
 // ---- streaming tools ------------------------------------------------------------
 
 #[tauri::command]

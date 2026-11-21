@@ -13,6 +13,9 @@ const PRELOAD_BEFORE_END = 25;
 /** Paused longer than this, a stream song restarts at the same spot instead of resuming the old
  *  connection (its link may have expired, or the PC slept in between). */
 const LONG_PAUSE = 20 * 60 * 1000;
+/** How many songs at the top of an opened list are prepared in the background. Kept small:
+ *  dozens of lookups in a row make YouTube hand out links that never work. */
+const WARM_ROWS = 8;
 
 let seq = 0;
 const newKey = () => `${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -57,6 +60,9 @@ class Player {
   #original = null; // queue order before shuffling, as keys
   #counted = false;
   #pausedAt = 0;
+  #warmToken = 0;
+  #warming = null; // the list warmList is working through
+  #shuffleStart = new WeakMap(); // list → the song Shuffle will start with, picked (and prepared) ahead
   #retry = { key: null, at: 0 }; // last silent retry, so a broken song isn't retried forever
 
   constructor() {
@@ -111,7 +117,41 @@ class Player {
   playShuffled(tracks) {
     if (!tracks.length) return;
     this.shuffle = true;
-    this.playList(tracks, Math.floor(Math.random() * tracks.length));
+    const picked = this.#shuffleStart.get(tracks);
+    this.#shuffleStart.delete(tracks);
+    this.playList(tracks, picked < tracks.length ? picked : Math.floor(Math.random() * tracks.length));
+  }
+
+  /** A list was opened: get the songs most likely to be played first ready (the top two, and
+   *  the one Shuffle will start with), so they start without the lookup wait. Then the rest of
+   *  the first screenful, one at a time, until another list opens or this one closes. */
+  async warmList(tracks) {
+    const token = ++this.#warmToken;
+    this.#warming = tracks;
+    if (!tracks?.length) return;
+    const pick = Math.floor(Math.random() * tracks.length);
+    this.#shuffleStart.set(tracks, pick);
+    const first = [...new Set([tracks[0], tracks[1], tracks[pick]])];
+    await Promise.all(first.map((t) => this.#prepare(t)));
+    for (const t of tracks.slice(0, WARM_ROWS)) {
+      if (token !== this.#warmToken) return;
+      if (!first.includes(t)) await this.#prepare(t);
+    }
+  }
+
+  /** `tracks` was closed: stop preparing it in the background (unless another list took over). */
+  stopWarming(tracks) {
+    if (tracks === this.#warming) this.#warmToken++;
+  }
+
+  #prepare(t) {
+    return t?.url && t.source !== "local" ? invoke("prepare", { url: t.url }).catch(() => {}) : Promise.resolve();
+  }
+
+  /** The next two songs, so skipping twice in a row is instant too. */
+  #warmUpcoming() {
+    this.warm(this.queue[this.index + 1]);
+    this.warm(this.queue[this.index + 2]);
   }
 
   /** Resolve a track in the background so it starts faster if it's played. */
@@ -297,7 +337,7 @@ class Player {
       if (e.name !== "AbortError" && token === this.#token) this.#failed();
     });
 
-    this.warm(this.queue[i + 1]);
+    this.#warmUpcoming();
   }
 
   /** A song can't play: say so, and move on to the next one. */
@@ -307,6 +347,7 @@ class Player {
     this.loading = false;
     this.playing = false;
     this.error = reason;
+    invoke("log_line", { text: `couldn't play "${track?.title}" (${track?.url}): ${reason}` }).catch(() => {});
     if (this.index + 1 >= this.queue.length) return;
     toasts.show(`Couldn't play ${track?.title ?? "this song"}, skipping`);
     setTimeout(() => {
@@ -362,7 +403,7 @@ class Player {
     this.#audio.play().catch((e) => {
       if (e.name !== "AbortError" && token === this.#token) this.#failed();
     });
-    this.warm(this.queue[this.index + 1]);
+    this.#warmUpcoming();
   }
 
   #stop() {

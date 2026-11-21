@@ -28,7 +28,10 @@ pub fn rescan(app: AppHandle, lib: Arc<Library>) {
         lib.scanning.store(false, Ordering::SeqCst);
         let payload = match result {
             Ok((total, updated)) => json!({ "state": "done", "total": total, "updated": updated }),
-            Err(e) => json!({ "state": "error", "message": e }),
+            Err(e) => {
+                crate::klog!("folder scan failed: {e}");
+                json!({ "state": "error", "message": e })
+            }
         };
         let _ = app.emit("scan", payload);
         let _ = app.emit("library-changed", "local");

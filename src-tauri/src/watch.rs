@@ -29,7 +29,7 @@ pub fn start(app: &AppHandle, lib: Arc<Library>) -> Arc<FolderWatch> {
             let _ = tx.send(());
         }
     })
-    .map_err(|e| eprintln!("[kite] folder watching unavailable: {e}"))
+    .map_err(|e| crate::klog!("folder watching unavailable: {e}"))
     .ok();
 
     let handle = app.clone();
@@ -84,7 +84,7 @@ pub fn refresh(app: &AppHandle) {
             Ok(()) => {
                 watched.insert(new.clone());
             }
-            Err(e) => eprintln!("[kite] can't watch {}: {e}", new.display()),
+            Err(e) => crate::klog!("can't watch {}: {e}", new.display()),
         }
     }
 }

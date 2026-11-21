@@ -43,7 +43,7 @@ fn create(app: &AppHandle) -> Option<MediaControls> {
         dbus_name: "app.kite.player",
         hwnd,
     })
-    .map_err(|e| eprintln!("[kite] media controls unavailable: {e:?}"))
+    .map_err(|e| crate::klog!("media controls unavailable: {e:?}"))
     .ok()?;
 
     let app = app.clone();
@@ -74,7 +74,7 @@ fn create(app: &AppHandle) -> Option<MediaControls> {
             };
             let _ = app.emit("media-control", payload);
         })
-        .map_err(|e| eprintln!("[kite] couldn't attach media controls: {e:?}"))
+        .map_err(|e| crate::klog!("couldn't attach media controls: {e:?}"))
         .ok()?;
     Some(controls)
 }
