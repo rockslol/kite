@@ -24,11 +24,13 @@ pub struct Settings {
     pub hotkeys: crate::hotkeys::Hotkeys,
     /// Show what's playing as Discord status (off by default: friends can see it).
     pub discord: bool,
+    /// Smaller streams to save data.
+    pub data_saver: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { close_to_tray: true, check_updates: true, hotkeys_on: false, hotkeys: Default::default(), discord: false }
+        Self { close_to_tray: true, check_updates: true, hotkeys_on: false, hotkeys: Default::default(), discord: false, data_saver: false }
     }
 }
 
@@ -149,8 +151,12 @@ pub fn settings_get(app: AppHandle, prefs: State<'_, Prefs>) -> SettingsView {
 
 #[tauri::command]
 pub fn settings_set(app: AppHandle, prefs: State<'_, Prefs>, settings: Settings) -> Result<(), String> {
+    let saver = settings.data_saver;
     prefs.set(settings)?;
     crate::discord::refresh(&app);
+    if let Some(state) = app.try_state::<AppState>() {
+        state.streams.set_saver(saver);
+    }
     Ok(())
 }
 

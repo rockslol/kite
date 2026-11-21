@@ -82,6 +82,8 @@ pub struct Streams {
     resolving: tokio::sync::Semaphore,
     links_file: PathBuf,
     saved: Mutex<HashMap<String, SavedLink>>,
+    /// Settings → Audio quality → Data saver.
+    saver: std::sync::atomic::AtomicBool,
 }
 
 impl Streams {
@@ -120,6 +122,7 @@ impl Streams {
             resolving: tokio::sync::Semaphore::new(4),
             links_file,
             saved: Mutex::new(saved),
+            saver: Default::default(),
         }
     }
 
@@ -190,6 +193,17 @@ impl Streams {
         n
     }
 
+    /// Switches between best quality and data saver. Links resolved for the other quality are
+    /// dropped, so the next songs load at the new one (downloaded HLS songs stay).
+    pub fn set_saver(&self, on: bool) {
+        use std::sync::atomic::Ordering;
+        if self.saver.swap(on, Ordering::Relaxed) == on {
+            return;
+        }
+        self.slots.lock().unwrap().retain(|_, s| matches!(s.get(), Some(Ok(e)) if matches!(e.source, Source::File { .. })));
+        self.save_links(|s| s.clear());
+    }
+
     /// How many resolved links are saved for later runs.
     pub fn saved_count(&self) -> usize {
         self.saved.lock().unwrap().len()
@@ -234,7 +248,7 @@ impl Streams {
         let started = Instant::now();
         let r = {
             let _permit = self.resolving.acquire().await.map_err(|e| e.to_string())?;
-            self.yt.resolve(page_url).await.map_err(|e| {
+            self.yt.resolve(page_url, self.saver.load(std::sync::atomic::Ordering::Relaxed)).await.map_err(|e| {
                 crate::klog!("couldn't find a stream for {page_url}: {e}");
                 e
             })?

@@ -153,6 +153,7 @@ fn main() {
 
             let yt = Arc::new(YtDlp::new(&data_dir.join("bin"), &cache_dir));
             let streams = Arc::new(Streams::new(yt.clone(), http.clone(), cache_dir));
+            streams.set_saver(app.state::<app::Prefs>().get().data_saver);
             let library = Arc::new(Library::open(&data_dir)?);
             app.manage(library.clone());
             app.manage(AppState { yt: yt.clone(), streams, library: library.clone(), http: http.clone() });

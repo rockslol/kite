@@ -45,7 +45,31 @@ const DEFAULTS = {
   eightD: false,
   mono: false,
   balance: 0,
+  level: false,
 };
+
+// ---- volume levelling ---------------------------------------------------------------
+/** Where songs are brought to (dBFS of the weighted signal; streaming services aim near here). */
+const TARGET_DB = -18;
+const MIN_GAIN_DB = -12;
+const MAX_GAIN_DB = 6;
+const LOUDNESS_KEY = "kite.loudness";
+const db2lin = (db) => Math.pow(10, db / 20);
+
+/** Measured loudness per song (by stream URL), so a song starts at the right level next time. */
+const remembered = (() => {
+  try {
+    return new Map(JSON.parse(localStorage.getItem(LOUDNESS_KEY) || "[]"));
+  } catch {
+    return new Map();
+  }
+})();
+function remember(key, db) {
+  remembered.delete(key);
+  remembered.set(key, Math.round(db * 10) / 10);
+  while (remembered.size > 3000) remembered.delete(remembered.keys().next().value);
+  localStorage.setItem(LOUDNESS_KEY, JSON.stringify([...remembered]));
+}
 
 function load() {
   try {
@@ -71,7 +95,12 @@ class Sound {
 
   /** Whether anything needs the Web Audio graph (speed and pitch don't). */
   needsGraph = $derived(
-    (this.s.eqOn && this.s.eq.some((g) => g !== 0)) || this.s.reverb > 0 || this.s.eightD || this.s.mono || this.s.balance !== 0
+    (this.s.eqOn && this.s.eq.some((g) => g !== 0)) ||
+      this.s.reverb > 0 ||
+      this.s.eightD ||
+      this.s.mono ||
+      this.s.balance !== 0 ||
+      this.s.level
   );
   /** Anything changed from plain playback (for the "on" dot on the Sound button). */
   active = $derived(this.needsGraph || this.s.speed !== 1);
@@ -145,10 +174,67 @@ class Sound {
     for (const el of player.audioElements()) this.#connect(el);
   }
 
+  /** Each player gets its own levelling gain and a meter that hears the song before it. */
+  #meters = [];
+  #levelTimer = null;
+  #levelOn = false;
+
   #connect(el) {
     if (this.#connected.has(el)) return;
     this.#connected.add(el);
-    this.#ctx.createMediaElementSource(el).connect(this.#nodes.input);
+    const ctx = this.#ctx;
+    const src = ctx.createMediaElementSource(el);
+    const gain = ctx.createGain();
+    src.connect(gain).connect(this.#nodes.input);
+    // A rough K-weighting (how loud it sounds, not just how big the waveform is): cut the
+    // deep bass, lift the upper mids, then measure.
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 60;
+    const shelf = ctx.createBiquadFilter();
+    shelf.type = "highshelf";
+    shelf.frequency.value = 1500;
+    shelf.gain.value = 4;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 4096;
+    src.connect(hp).connect(shelf).connect(analyser);
+    this.#meters.push({ el, gain, analyser, buf: new Float32Array(analyser.fftSize), key: "", sum: 0, n: 0 });
+  }
+
+  /** Every 100 ms: measure what each playing song sounds like and steer its gain toward the
+   *  common level. Quiet passages (below -50 dB) don't count, so a soft intro doesn't get
+   *  pushed up. */
+  #level() {
+    const t = this.#ctx.currentTime;
+    for (const m of this.#meters) {
+      const key = m.el.currentSrc || m.el.src;
+      if (key !== m.key) {
+        // A new song in this player: start from what we measured last time, if anything.
+        m.key = key;
+        m.sum = 0;
+        m.n = 0;
+        const known = remembered.get(key);
+        m.gain.gain.setTargetAtTime(known === undefined ? 1 : db2lin(this.#gainFor(known)), t, 0.05);
+      }
+      if (!key || m.el.paused || m.el.volume < 0.05) continue;
+      m.analyser.getFloatTimeDomainData(m.buf);
+      let ms = 0;
+      for (const x of m.buf) ms += x * x;
+      ms /= m.buf.length;
+      // The player's own volume (and crossfades) come before the meter: take them back out.
+      const db = 10 * Math.log10(ms + 1e-12) - 20 * Math.log10(m.el.volume);
+      if (db < -50) continue;
+      m.sum += Math.pow(10, db / 10);
+      m.n++;
+      if (m.n < 20) continue; // two seconds before trusting it
+      const loud = 10 * Math.log10(m.sum / m.n);
+      m.gain.gain.setTargetAtTime(db2lin(this.#gainFor(loud)), t, 1.5);
+      if (m.n % 50 === 0) remember(key, loud);
+    }
+  }
+
+  #gainFor(loudDb) {
+    return Math.max(MIN_GAIN_DB, Math.min(MAX_GAIN_DB, TARGET_DB - loudDb));
   }
 
   #apply() {
@@ -168,6 +254,18 @@ class Sound {
     smooth(depth.gain, this.s.eightD ? 0.85 : 0);
     mono.channelCount = this.s.mono ? 1 : 2;
     mono.channelCountMode = this.s.mono ? "explicit" : "max";
+    // Levelling runs only while it's on; off, every player is back at plain volume. Only an
+    // on/off change restarts it (EQ drags mustn't reset the measurements).
+    if (this.s.level !== this.#levelOn) {
+      this.#levelOn = this.s.level;
+      clearInterval(this.#levelTimer);
+      if (this.s.level) {
+        for (const m of this.#meters) m.key = ""; // start from remembered levels
+        this.#levelTimer = setInterval(() => this.#level(), 100);
+      } else {
+        for (const m of this.#meters) m.gain.gain.setTargetAtTime(1, t, 0.1);
+      }
+    }
   }
 
   set(patch) {

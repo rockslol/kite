@@ -18,8 +18,8 @@
 
   async function save(patch) {
     s = { ...s, ...patch };
-    const { close_to_tray, check_updates, hotkeys_on, hotkeys, discord } = s;
-    await invoke("settings_set", { settings: { close_to_tray, check_updates, hotkeys_on, hotkeys, discord } }).catch((e) =>
+    const { close_to_tray, check_updates, hotkeys_on, hotkeys, discord, data_saver } = s;
+    await invoke("settings_set", { settings: { close_to_tray, check_updates, hotkeys_on, hotkeys, discord, data_saver } }).catch((e) =>
       toasts.show(String(e))
     );
     if ("hotkeys_on" in patch || "hotkeys" in patch) problems = await invoke("hotkeys_apply");
@@ -387,6 +387,13 @@
 
     <section>
       <h2>Streaming</h2>
+      <div class="row">
+        <div>
+          <p class="label">Data saver</p>
+          <p class="hint">Smaller streams (about 50-70 kbps instead of 130-160), roughly half the data. Sound is a little less clear.</p>
+        </div>
+        {@render toggle(s.data_saver, (v) => save({ data_saver: v }), "Data saver")}
+      </div>
       <div class="row">
         <div>
           <p class="label">yt-dlp <span class="value">{tools.ytdlp_version || "…"}</span></p>

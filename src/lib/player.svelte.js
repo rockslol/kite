@@ -69,6 +69,10 @@ class Player {
   sleep = $state(null);
   sleepLeft = $state(0); // seconds, for the countdown
   #fade = $state(1); // volume factor while the timer fades out
+  /** Crossfade length in seconds (0 = off). */
+  crossfade = $state(Number(localStorage.getItem("kite.crossfade")) || 0);
+  #xf = null; // { old, start, dur } while two songs overlap
+  #xfTimer = null;
   #sleepTick = null;
   #warmToken = 0;
   #warming = null; // the list warmList is working through
@@ -85,8 +89,12 @@ class Player {
 
     $effect.root(() => {
       $effect(() => {
-        this.#audio.volume = this.volume * this.#fade;
-        this.#standby.volume = this.volume * this.#fade;
+        this.volume;
+        this.#fade;
+        this.#applyVolume();
+      });
+      $effect(() => {
+        localStorage.setItem("kite.crossfade", String(this.crossfade));
       });
       $effect(() => this.#save());
     });
@@ -434,6 +442,7 @@ class Player {
   }
 
   #clearStandby() {
+    this.#endCrossfade();
     this.#standbyKey = null;
     this.#standby.pause();
     this.#standby.removeAttribute("src");
@@ -458,6 +467,7 @@ class Player {
 
   /** The song ended (or "next" was pressed) and the next one is already loaded: switch now. */
   #swapToStandby() {
+    this.#endCrossfade();
     const old = this.#audio;
     this.#audio = this.#standby;
     this.#standby = old;
@@ -477,6 +487,72 @@ class Player {
       if (e.name !== "AbortError" && token === this.#token) this.#failed();
     });
     this.#warmUpcoming();
+  }
+
+  // ---- crossfade --------------------------------------------------------------
+
+  /** Volume of both players: the user's volume, the sleep-timer fade, and during a crossfade
+   *  an equal-power blend (no dip in the middle). */
+  #applyVolume() {
+    const v = this.volume * this.#fade;
+    if (!this.#xf) {
+      this.#audio.volume = v;
+      this.#standby.volume = v;
+      return;
+    }
+    const p = Math.min(1, (performance.now() - this.#xf.start) / (this.#xf.dur * 1000));
+    this.#audio.volume = v * Math.sin((p * Math.PI) / 2);
+    this.#xf.old.volume = v * Math.cos((p * Math.PI) / 2);
+    if (p >= 1) this.#endCrossfade();
+  }
+
+  /** Whether the current song should fade into the next one now. */
+  #shouldCrossfade(a, left) {
+    return (
+      this.crossfade > 0 &&
+      !this.#xf &&
+      left <= this.crossfade &&
+      left > 0.5 &&
+      a.duration > this.crossfade * 2 + 5 &&
+      this.repeat !== "one" &&
+      !this.sleep?.endOfSong &&
+      this.#standbyReady()
+    );
+  }
+
+  /** The next song (already loaded in the standby player) starts while this one fades out. */
+  #crossfadeTo(dur) {
+    const old = this.#audio;
+    this.#audio = this.#standby;
+    this.#standby = old;
+    this.#standbyKey = null;
+    this.#xf = { old, start: performance.now(), dur };
+    const token = ++this.#token;
+    this.index += 1;
+    this.error = "";
+    this.time = 0;
+    this.duration = this.current?.duration || 0;
+    this.#newSong();
+    this.#sendTrack(this.current);
+    this.#audio.currentTime = 0;
+    this.#applyVolume();
+    this.#audio.play().catch((e) => {
+      if (e.name !== "AbortError" && token === this.#token) this.#failed();
+    });
+    this.#xfTimer = setInterval(() => this.#applyVolume(), 50);
+    this.#warmUpcoming();
+  }
+
+  /** Stop the fading-out song (the fade finished, or the user did something). */
+  #endCrossfade() {
+    if (!this.#xf) return;
+    const { old } = this.#xf;
+    this.#xf = null;
+    clearInterval(this.#xfTimer);
+    old.pause();
+    old.removeAttribute("src");
+    old.load();
+    this.#applyVolume();
   }
 
   #newSong() {
@@ -518,6 +594,7 @@ class Player {
     });
     a.addEventListener("pause", () => {
       if (!active()) return;
+      this.#endCrossfade();
       this.#pausedAt = Date.now();
       this.playing = false;
       this.#media("paused");
@@ -534,9 +611,10 @@ class Player {
       // changed since).
       const left = a.duration - a.currentTime;
       const next = this.queue[this.index + 1];
-      if (next && Number.isFinite(left) && left < PRELOAD_BEFORE_END && this.#standbyKey !== next.key) {
+      if (next && Number.isFinite(left) && left < PRELOAD_BEFORE_END && this.#standbyKey !== next.key && !this.#xf) {
         this.#preloadNext();
       }
+      if (Number.isFinite(left) && this.#shouldCrossfade(a, left)) this.#crossfadeTo(Math.min(this.crossfade, left));
       // Counts as a play after 30 s, or halfway through shorter songs.
       if (!this.#counted && this.current && a.currentTime >= Math.min(30, (a.duration || 60) / 2)) {
         this.#counted = true;

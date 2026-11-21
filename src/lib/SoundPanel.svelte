@@ -97,6 +97,17 @@
       Mono (the same sound in both ears)
     </label>
 
+    <p class="label">Playback</p>
+    <label class="check">
+      <input type="checkbox" checked={sound.s.level} onchange={(e) => sound.set({ level: e.currentTarget.checked })} />
+      Even out volume (quiet and loud songs play at a similar level)
+    </label>
+    <div class="field">
+      <span>Crossfade</span>
+      <input type="range" min="0" max="12" step="1" value={player.crossfade} oninput={(e) => (player.crossfade = +e.currentTarget.value)} />
+      <span class="num">{player.crossfade ? `${player.crossfade} s` : "Off"}</span>
+    </div>
+
     <p class="label">Sleep timer</p>
     <div class="chips">
       {#each SLEEP as [when, text]}

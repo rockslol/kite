@@ -388,14 +388,23 @@ impl YtDlp {
         to_track(source_of(url), &v).ok_or_else(|| "Couldn't read that link.".to_string())
     }
 
-    pub async fn resolve(&self, url: &str) -> Result<Resolved, String> {
+    /// `saver`: smaller streams (about 50-70 kbps instead of the best, ~130-160 kbps).
+    pub async fn resolve(&self, url: &str, saver: bool) -> Result<Resolved, String> {
         self.wait_ready().await?;
         // macOS's webview (WebKit) is safest with AAC/MP3, so prefer m4a there. Chromium-based
         // WebView2 plays Opus/WebM fine, which is usually YouTube's best audio.
         #[cfg(target_os = "macos")]
-        let format = "bestaudio[ext=m4a][protocol^=http][protocol!*=dash]/bestaudio[ext=mp3]/bestaudio[protocol^=http][protocol!*=dash]/bestaudio/best";
+        let format = if saver {
+            "bestaudio[ext=m4a][abr<=72][protocol^=http][protocol!*=dash]/worstaudio[ext=m4a][protocol^=http][protocol!*=dash]/bestaudio[ext=mp3]/bestaudio/best"
+        } else {
+            "bestaudio[ext=m4a][protocol^=http][protocol!*=dash]/bestaudio[ext=mp3]/bestaudio[protocol^=http][protocol!*=dash]/bestaudio/best"
+        };
         #[cfg(not(target_os = "macos"))]
-        let format = "bestaudio[protocol^=http][protocol!*=dash]/bestaudio[protocol^=http]/bestaudio/best";
+        let format = if saver {
+            "bestaudio[abr<=72][protocol^=http][protocol!*=dash]/worstaudio[protocol^=http][protocol!*=dash]/bestaudio[protocol^=http]/bestaudio/best"
+        } else {
+            "bestaudio[protocol^=http][protocol!*=dash]/bestaudio[protocol^=http]/bestaudio/best"
+        };
         let out = self.run(&["-J", "--no-playlist", "-f", format, "--", url]).await?;
         let v: Value = serde_json::from_slice(&out).map_err(|e| e.to_string())?;
         let stream = v["url"].as_str().ok_or("no playable stream found")?.to_string();
