@@ -2,6 +2,10 @@
 
 What changed in each version of Kite. The newest version is at the top.
 
+## 0.5.0 (not released yet)
+
+### Discover
+
 ## 0.4.1 (2026-11-23)
 
 ### Fixes
