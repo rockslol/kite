@@ -2,7 +2,7 @@
 
 What changed in each version of Kite. The newest version is at the top.
 
-## 0.3.0 (not released yet)
+## 0.3.0 (2026-11-22)
 
 ### Lyrics
 

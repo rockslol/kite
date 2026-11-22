@@ -35,6 +35,9 @@ No account. No ads. No tracking or telemetry.
 - **Pick another version**: If a match is wrong, right-click it and choose another. Kite remembers your choice for the next import.
 - **Library**: Liked songs, playlists you can rename and reorder by dragging, Recently played, and Most played.
 - **Queue**: Play next, add to queue, drag to reorder, shuffle, and repeat. Your queue and position are still there after a restart.
+- **Synced lyrics**: Line-by-line lyrics from [LRCLIB](https://lrclib.net) or a `.lrc` file next to a local song, with the current line kept in view. Click a line to jump there, and nudge the timing if it's early or late.
+- **Sharing**: Show what you're playing as your Discord status, and scrobble to Last.fm or ListenBrainz with your own account. All off until you switch them on.
+- **Shortcuts everywhere**: Play, pause, skip, like, and show Kite from any app, with keys you choose.
 - **System integration**: Media keys, the Windows media controls and volume flyout, a tray icon with playback controls, and start with Windows.
 - **Light by design**: Closing the window keeps the music playing in the tray, where Kite stops drawing its interface entirely.
 - **Always working**: Kite downloads [yt-dlp](https://github.com/yt-dlp/yt-dlp) on first run, checks it against the official checksums, and keeps it updated by itself, so site changes don't need a new Kite release.
