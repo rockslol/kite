@@ -1,10 +1,23 @@
 <script>
   import { player } from "./player.svelte.js";
   import { menu } from "./ui.svelte.js";
-  import { artSrc } from "./urls.js";
+  import { artSrc, fmtTotal, plural } from "./urls.js";
+
+  /** Played songs shown before "Show all". */
+  const SHOW_PLAYED = 3;
 
   let dragKey = $state(null);
   let dropAt = $state(-1);
+  let allPlayed = $state(false);
+
+  let shownPlayed = $derived(allPlayed ? player.played : player.played.slice(-SHOW_PLAYED));
+  // Songs in the queue from the current one on, and how long they still play.
+  let summary = $derived.by(() => {
+    const n = player.upcoming.length + (player.current ? 1 : 0);
+    if (!n) return "";
+    const left = player.timeLeft;
+    return `${plural(n, "song")}${left >= 30 ? ` · ${fmtTotal([{ duration: left }])} left` : ""}`;
+  });
 
   function onDragStart(e, key) {
     dragKey = key;
@@ -34,13 +47,39 @@
 
 <aside>
   <div class="head">
-    <h2>Queue</h2>
-    {#if player.upcoming.length}
-      <button class="text" onclick={() => player.clearUpcoming()}>Clear</button>
-    {/if}
+    <div class="titles">
+      <h2>Queue</h2>
+      {#if summary}<p class="summary">{summary}</p>{/if}
+    </div>
+    <div class="actions">
+      {#if player.duplicates.length}
+        <button class="text" onclick={() => player.removeDuplicates()} title="Take out songs that are already in the queue">
+          Remove duplicates
+        </button>
+      {/if}
+      {#if player.upcoming.length}
+        <button class="text" onclick={() => player.clearUpcoming()}>Clear</button>
+      {/if}
+    </div>
   </div>
 
   <div class="scroll">
+    {#if player.played.length}
+      <div class="label-row">
+        <p class="label">Played</p>
+        {#if player.played.length > SHOW_PLAYED}
+          <button class="text small" onclick={() => (allPlayed = !allPlayed)}>
+            {allPlayed ? "Show less" : `Show all ${player.played.length}`}
+          </button>
+        {/if}
+      </div>
+      <div class="played">
+        {#each shownPlayed as t (t.key)}
+          {@render item(t, -1, false, true)}
+        {/each}
+      </div>
+    {/if}
+
     {#if player.current}
       <p class="label">Now playing</p>
       {@render item(player.current, -1, true)}
@@ -69,10 +108,12 @@
   </div>
 </aside>
 
-{#snippet item(t, i, isCurrent)}
+{#snippet item(t, i, isCurrent, wasPlayed = false)}
   <div
     class="item"
     class:current={isCurrent}
+    class:was-played={wasPlayed}
+    title={wasPlayed ? "Double-click to play it again" : undefined}
     role="button"
     tabindex="0"
     ondblclick={() => !isCurrent && player.jump(t.key)}
@@ -80,7 +121,7 @@
     oncontextmenu={(e) => {
       e.preventDefault();
       menu.open(e, [
-        ...(isCurrent ? [] : [{ label: "Play now", action: () => player.jump(t.key) }]),
+        ...(isCurrent ? [] : [{ label: wasPlayed ? "Play again" : "Play now", action: () => player.jump(t.key) }]),
         { label: "Remove from queue", action: () => player.remove(t.key) },
       ]);
     }}
@@ -107,14 +148,47 @@
   }
   .head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: 8px;
     padding: 4px 16px 8px;
+  }
+  .titles {
+    min-width: 0;
   }
   h2 {
     margin: 0;
     font-size: 15px;
     font-weight: 600;
+  }
+  .summary {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .actions {
+    display: flex;
+    gap: 12px;
+    flex-shrink: 0;
+    padding-top: 1px;
+  }
+  .label-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-right: 8px;
+  }
+  .text.small {
+    font-size: 12px;
+  }
+  .item.was-played {
+    opacity: 0.6;
+  }
+  .item.was-played:hover,
+  .item.was-played:focus-visible {
+    opacity: 1;
   }
   .text {
     color: var(--muted);

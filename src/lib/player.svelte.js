@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { untrack } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
 import { decide, isQuiet } from "./quiet.js";
 import { streamUrl } from "./urls.js";
 import { toasts } from "./ui.svelte.js";
@@ -50,6 +51,26 @@ class Player {
 
   current = $derived(this.queue[this.index]);
   upcoming = $derived(this.queue.slice(this.index + 1));
+  /** Keys of queue items that started playing this session. */
+  #started = new SvelteSet();
+  /** Songs before the current one that were played this session (not just skipped over when
+   *  a list was started in the middle), oldest first. */
+  played = $derived(this.queue.slice(0, Math.max(0, this.index)).filter((t) => this.#started.has(t.key)));
+  /** Seconds left: the rest of this song plus everything up next. */
+  timeLeft = $derived(
+    Math.max(0, (this.duration || 0) - this.time) + this.upcoming.reduce((sum, t) => sum + (t.duration || 0), 0),
+  );
+  /** Up next songs that are the same as the current one or one earlier in up next. */
+  duplicates = $derived.by(() => {
+    const id = (t) => t.url || t.key;
+    const seen = new Set(this.current ? [id(this.current)] : []);
+    const out = [];
+    for (const t of this.upcoming) {
+      if (seen.has(id(t))) out.push(t.key);
+      else seen.add(id(t));
+    }
+    return out;
+  });
 
   // Two players: the active one, and a standby that loads the next song near the end of
   // this one, so the switch has no gap (and "next" is instant).
@@ -178,6 +199,7 @@ class Player {
     const items = tracks.map(toItem);
     this.queue.splice(this.index + 1, 0, ...items);
     this.#original?.push(...items.map((t) => t.key));
+    this.#queuedToast(items, items.length === 1 ? `Playing next: ${items[0].title}` : `${items.length} songs play next`);
   }
 
   /** Add a song (or several) to the end of the queue. */
@@ -187,6 +209,18 @@ class Player {
     const items = tracks.map(toItem);
     this.queue.push(...items);
     this.#original?.push(...items.map((t) => t.key));
+    this.#queuedToast(items, items.length === 1 ? `Added to queue: ${items[0].title}` : `Added ${items.length} songs to the queue`);
+  }
+
+  /** Undo takes back the songs that haven't started playing yet. */
+  #queuedToast(items, text) {
+    toasts.undo(text, () => this.#dropUpcoming(new Set(items.map((t) => t.key))));
+  }
+
+  /** Take songs out of the up next part of the queue (never the current or played ones). */
+  #dropUpcoming(keys) {
+    this.queue = [...this.queue.slice(0, this.index + 1), ...this.queue.slice(this.index + 1).filter((t) => !keys.has(t.key))];
+    if (this.#original) this.#original = this.#original.filter((k) => !keys.has(k));
   }
 
   /** Play `tracks` in random order. */
@@ -295,6 +329,24 @@ class Player {
     }
     this.queue.splice(i, 1);
     if (i < this.index) this.index--;
+  }
+
+  /** Take out up next songs that are already playing or earlier in the queue. */
+  removeDuplicates() {
+    const drop = new Set(this.duplicates);
+    if (!drop.size) return;
+    const before = this.queue.slice(this.index + 1);
+    this.#dropUpcoming(drop);
+    const text = drop.size === 1 ? "Removed 1 duplicate" : `Removed ${drop.size} duplicates`;
+    toasts.undo(text, () => {
+      // Back in their old places among the songs still up next; songs added since stay last.
+      const now = this.queue.slice(this.index + 1);
+      const nowKeys = new Set(now.map((t) => t.key));
+      const known = new Set(before.map((t) => t.key));
+      const back = before.filter((t) => nowKeys.has(t.key) || drop.has(t.key));
+      this.queue = [...this.queue.slice(0, this.index + 1), ...back, ...now.filter((t) => !known.has(t.key))];
+      this.#original?.push(...drop);
+    });
   }
 
   /** Move an upcoming item to position `to` within the upcoming list. */
@@ -714,6 +766,7 @@ class Player {
   }
 
   #newSong() {
+    if (this.current) this.#started.add(this.current.key);
     this.#quietSince = 0;
     this.#counted = false;
     this.#announced = false;
