@@ -36,6 +36,7 @@ No account. No ads. No tracking or telemetry.
 - **Library**: Liked songs, playlists you can rename and reorder by dragging, Recently played, and Most played.
 - **Queue**: Play next, add to queue, drag to reorder, shuffle, and repeat. Your queue and position are still there after a restart.
 - **Synced lyrics**: Line-by-line lyrics from [LRCLIB](https://lrclib.net) or a `.lrc` file next to a local song, with the current line kept in view. Click a line to jump there, and nudge the timing if it's early or late.
+- **Sound**: One-click effects (Slowed + reverb, Nightcore, 8D…), speed and pitch, reverb, a 10-band equalizer, balance and mono, a sleep timer, crossfade that can wait for a song's quiet ending, and even-out volume. Pick which speakers or headphones Kite plays on; each keeps its own volume and equalizer.
 - **Sharing**: Show what you're playing as your Discord status, and scrobble to Last.fm or ListenBrainz with your own account. All off until you switch them on.
 - **Shortcuts everywhere**: Play, pause, skip, like, and show Kite from any app, with keys you choose.
 - **System integration**: Media keys, the Windows media controls and volume flyout, a tray icon with playback controls, and start with Windows.
