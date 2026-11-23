@@ -9,10 +9,11 @@ What changed in each version of Kite. The newest version is at the top.
 - **Sound panel** (the sliders button, or **E**): one-click effects (Slowed, Slowed + reverb, Nightcore, Sped up, 8D), speed with or without keeping the pitch, reverb, and a 10-band equalizer with presets.
 - **Balance and mono**, for one-sided hearing or a single earbud.
 - **Sleep timer**: stop after 15 minutes, 30 minutes, an hour, or at the end of the song, fading out gently.
-- **Crossfade** (0-12 seconds): the next song fades in while this one fades out.
+- **Crossfade** (0-12 seconds): the next song fades in while this one fades out. **Wait for a quiet ending** makes it work like a DJ: when a song fades out or winds down early, the next one starts there instead of at a fixed time.
 - **Even out volume**: quiet and loud songs play at a similar level. Kite measures each song as it plays and remembers it, so it starts at the right level next time.
 - **Data saver** (Settings → Streaming): smaller streams, about half the data, for when you're on a hotspot.
-- **Volume per device** (Windows): headphones and speakers each keep their own volume. When Windows switches output, Kite switches to that device's volume and says where it's playing.
+- **Play on** (top of the Sound panel, Windows): pick the speakers or headphones Kite plays on, or follow Windows. If the picked device is unplugged, Kite plays where Windows does until it's back.
+- **Volume and equalizer per device**: headphones and speakers each keep their own volume and equalizer. When the output changes, Kite switches to that device's settings and says where it's playing.
 - Kite only switches its sound engine on once you use one of these, so plain listening is as light as before.
 
 ## 0.3.0 (2026-11-22)

@@ -10,6 +10,8 @@ import { untrack } from "svelte";
 import { player } from "./player.svelte.js";
 
 const KEY = "kite.sound";
+/** Equalizer per output device: { "Speakers (…)": { eqOn, eq, eqPreset } }. */
+const EQ_KEY = "kite.outputEq";
 export const BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
 export const EQ_PRESETS = {
@@ -100,7 +102,8 @@ class Sound {
       this.s.eightD ||
       this.s.mono ||
       this.s.balance !== 0 ||
-      this.s.level
+      this.s.level ||
+      (player.crossfade > 0 && player.crossfadeSmart)
   );
   /** Anything changed from plain playback (for the "on" dot on the Sound button). */
   active = $derived(this.needsGraph || this.s.speed !== 1);
@@ -124,9 +127,37 @@ class Sound {
         if (this.needsGraph) untrack(() => this.#build());
         if (this.#nodes) this.#apply();
       });
+      // Each output keeps its own equalizer: switching to the headphones brings theirs back.
+      const eqs = (() => {
+        try {
+          return JSON.parse(localStorage.getItem(EQ_KEY) || "{}");
+        } catch {
+          return {};
+        }
+      })();
+      let prev = null;
+      $effect(() => {
+        const name = player.outputName;
+        untrack(() => {
+          // The one we're leaving keeps what it had, even if it was never changed while on it.
+          if (prev && prev !== name) eqs[prev] = { eqOn: this.s.eqOn, eq: this.s.eq.slice(), eqPreset: this.s.eqPreset };
+          prev = name || prev;
+          const saved = name && eqs[name];
+          if (saved) this.s = { ...this.s, eqOn: saved.eqOn, eq: saved.eq.slice(), eqPreset: saved.eqPreset };
+        });
+      });
+      // Not tracking the name here: on a switch, the effect above loads first.
+      $effect(() => {
+        const { eqOn, eq, eqPreset } = this.s;
+        const name = untrack(() => player.outputName);
+        if (!name) return;
+        eqs[name] = { eqOn, eq: eq.slice(), eqPreset };
+        localStorage.setItem(EQ_KEY, JSON.stringify(eqs));
+      });
     });
     // A context made before any click starts suspended; wake it whenever music plays.
     player.onPlay(() => this.#ctx?.state === "suspended" && this.#ctx.resume());
+    player.setQuietProbe((el) => this.#quiet(el));
   }
 
   #build() {
@@ -169,15 +200,27 @@ class Sound {
     limiter.ratio.value = 20;
     limiter.attack.value = 0.002;
     limiter.release.value = 0.15;
-    panner.connect(mono).connect(limiter).connect(ctx.destination);
-    this.#nodes = { input, filters, last, reverb, reverbOn: false, dry, wet, panner, depth, mono };
+    const master = ctx.createGain();
+    panner.connect(mono).connect(limiter).connect(master).connect(ctx.destination);
+    this.#nodes = { input, filters, last, reverb, reverbOn: false, dry, wet, panner, depth, mono, master };
     for (const el of player.audioElements()) this.#connect(el);
+    // Out of the speakers or headphones picked in Kite, like the plain players.
+    player.onSink((id) => ctx.setSinkId?.(id).catch((e) => console.warn("output", e)));
+  }
+
+  /** Dev builds only: build the graph and send nothing to the speakers, so test scripts can
+   *  play songs (and measure them) without a sound. */
+  _silence(on = true) {
+    if (!import.meta.env.DEV) return;
+    this.#build();
+    this.#nodes.master.gain.value = on ? 0 : 1;
   }
 
   /** Each player gets its own levelling gain and a meter that hears the song before it. */
   #meters = [];
   #levelTimer = null;
   #levelOn = false;
+  #measuring = false;
 
   #connect(el) {
     if (this.#connected.has(el)) return;
@@ -198,12 +241,20 @@ class Sound {
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 4096;
     src.connect(hp).connect(shelf).connect(analyser);
-    this.#meters.push({ el, gain, analyser, buf: new Float32Array(analyser.fftSize), key: "", sum: 0, n: 0 });
+    this.#meters.push({ el, gain, analyser, buf: new Float32Array(analyser.fftSize), key: "", sum: 0, n: 0, st: null });
   }
 
-  /** Every 100 ms: measure what each playing song sounds like and steer its gain toward the
-   *  common level. Quiet passages (below -50 dB) don't count, so a soft intro doesn't get
-   *  pushed up. */
+  /** How loud a player is right now and on average this song (dB), for the DJ crossfade.
+   *  The average needs 5 seconds of sound first. */
+  #quiet(el) {
+    const m = this.#meters.find((x) => x.el === el);
+    if (!m || m.st == null) return null;
+    return { now: 10 * Math.log10(m.st + 1e-12), avg: m.n >= 50 ? 10 * Math.log10(m.sum / m.n) : null };
+  }
+
+  /** Every 100 ms: measure what each playing song sounds like (for the DJ crossfade) and, with
+   *  levelling on, steer its gain toward the common level. Quiet passages (below -50 dB) don't
+   *  count toward the average, so a soft intro doesn't get pushed up. */
   #level() {
     const t = this.#ctx.currentTime;
     for (const m of this.#meters) {
@@ -213,8 +264,9 @@ class Sound {
         m.key = key;
         m.sum = 0;
         m.n = 0;
+        m.st = null;
         const known = remembered.get(key);
-        m.gain.gain.setTargetAtTime(known === undefined ? 1 : db2lin(this.#gainFor(known)), t, 0.05);
+        if (this.s.level) m.gain.gain.setTargetAtTime(known === undefined ? 1 : db2lin(this.#gainFor(known)), t, 0.05);
       }
       if (!key || m.el.paused || m.el.volume < 0.05) continue;
       m.analyser.getFloatTimeDomainData(m.buf);
@@ -223,10 +275,13 @@ class Sound {
       ms /= m.buf.length;
       // The player's own volume (and crossfades) come before the meter: take them back out.
       const db = 10 * Math.log10(ms + 1e-12) - 20 * Math.log10(m.el.volume);
+      const power = Math.pow(10, db / 10);
+      // The last second or so, quiet parts included.
+      m.st = m.st == null ? power : m.st * 0.8 + power * 0.2;
       if (db < -50) continue;
-      m.sum += Math.pow(10, db / 10);
+      m.sum += power;
       m.n++;
-      if (m.n < 20) continue; // two seconds before trusting it
+      if (!this.s.level || m.n < 20) continue; // two seconds before trusting it
       const loud = 10 * Math.log10(m.sum / m.n);
       m.gain.gain.setTargetAtTime(db2lin(this.#gainFor(loud)), t, 1.5);
       if (m.n % 50 === 0) remember(key, loud);
@@ -254,17 +309,19 @@ class Sound {
     smooth(depth.gain, this.s.eightD ? 0.85 : 0);
     mono.channelCount = this.s.mono ? 1 : 2;
     mono.channelCountMode = this.s.mono ? "explicit" : "max";
-    // Levelling runs only while it's on; off, every player is back at plain volume. Only an
-    // on/off change restarts it (EQ drags mustn't reset the measurements).
+    // Measuring runs while levelling or the DJ crossfade needs it; with levelling off, every
+    // player is at plain volume. Only an on/off change restarts it (EQ drags mustn't reset
+    // the measurements).
+    const measure = this.s.level || (player.crossfade > 0 && player.crossfadeSmart);
+    if (measure !== this.#measuring) {
+      this.#measuring = measure;
+      clearInterval(this.#levelTimer);
+      if (measure) this.#levelTimer = setInterval(() => this.#level(), 100);
+    }
     if (this.s.level !== this.#levelOn) {
       this.#levelOn = this.s.level;
-      clearInterval(this.#levelTimer);
-      if (this.s.level) {
-        for (const m of this.#meters) m.key = ""; // start from remembered levels
-        this.#levelTimer = setInterval(() => this.#level(), 100);
-      } else {
-        for (const m of this.#meters) m.gain.gain.setTargetAtTime(1, t, 0.1);
-      }
+      if (this.s.level) for (const m of this.#meters) m.key = ""; // start from remembered levels
+      else for (const m of this.#meters) m.gain.gain.setTargetAtTime(1, t, 0.1);
     }
   }
 

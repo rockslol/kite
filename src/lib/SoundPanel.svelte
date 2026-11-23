@@ -22,6 +22,23 @@
   </div>
 
   <div class="scroll">
+    {#if player.canPickOutput && player.outputs.length}
+      <p class="label">Play on</p>
+      <select
+        class="output"
+        value={player.output?.id ?? ""}
+        onchange={(e) => player.setOutput(player.outputs.find((o) => o.id === e.currentTarget.value) ?? null)}
+      >
+        <option value="">Same as Windows</option>
+        {#each player.outputs as o (o.id)}
+          <option value={o.id} data-no-translate>{o.label}</option>
+        {/each}
+      </select>
+      {#if player.output && !player.sink}
+        <p class="hint"><span data-no-translate>{player.output.label}</span> isn't connected, so Kite plays where Windows does.</p>
+      {/if}
+    {/if}
+
     <p class="label">Effects</p>
     <div class="chips">
       {#each Object.keys(EFFECTS) as name}
@@ -55,6 +72,9 @@
         On
       </label>
     </div>
+    {#if player.outputName}
+      <p class="hint eqfor">For <span data-no-translate>{player.outputName}</span>. Each output keeps its own.</p>
+    {/if}
     <div class="chips">
       {#each Object.keys(EQ_PRESETS) as name}
         <button class="chip" class:on={sound.s.eqOn && sound.s.eqPreset === name} onclick={() => sound.eqPreset(name)}>{name}</button>
@@ -107,6 +127,12 @@
       <input type="range" min="0" max="12" step="1" value={player.crossfade} oninput={(e) => (player.crossfade = +e.currentTarget.value)} />
       <span class="num">{player.crossfade ? `${player.crossfade} s` : "Off"}</span>
     </div>
+    {#if player.crossfade > 0}
+      <label class="check">
+        <input type="checkbox" checked={player.crossfadeSmart} onchange={(e) => (player.crossfadeSmart = e.currentTarget.checked)} />
+        Wait for a quiet ending (start the next song when this one fades out, like a DJ)
+      </label>
+    {/if}
 
     <p class="label">Sleep timer</p>
     <div class="chips">
@@ -154,6 +180,20 @@
     flex: 1;
     overflow-y: auto;
     padding: 0 16px 16px;
+  }
+  .eqfor {
+    margin: -4px 0 8px;
+  }
+  .output {
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    margin-bottom: 4px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    outline: none;
   }
   .label {
     margin: 14px 0 8px;

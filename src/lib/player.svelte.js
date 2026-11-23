@@ -2,6 +2,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { untrack } from "svelte";
+import { decide, isQuiet } from "./quiet.js";
 import { streamUrl } from "./urls.js";
 import { toasts } from "./ui.svelte.js";
 
@@ -72,9 +74,26 @@ class Player {
   /** Crossfade length in seconds (0 = off). */
   crossfade = $state(Number(localStorage.getItem("kite.crossfade")) || 0);
   #xf = null; // { old, start, dur } while two songs overlap
-  // Volume per output device (Windows tells us when the default device changes).
-  #device = null;
-  #deviceVolumes = JSON.parse(localStorage.getItem("kite.deviceVolumes") || "{}");
+  /** DJ-style crossfade: start the next song where this one's ending goes quiet. */
+  crossfadeSmart = $state(localStorage.getItem("kite.crossfadeSmart") === "1");
+  #quietProbe = null; // from the sound engine: (audio element) → { now, avg } in dB
+  #quietSince = 0;
+  /** The last crossfade: { step: "quiet" | "plain", left } (for test scripts). */
+  lastCrossfade = null;
+  // ---- output device ----
+  /** Whether this webview can send audio to a chosen device (WebView2 yes, macOS WebKit no). */
+  canPickOutput = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+  /** Speakers and headphones the window can play on: [{ id, label }]. */
+  outputs = $state([]);
+  /** The one picked in Kite, or null to follow Windows' default. */
+  output = $state(JSON.parse(localStorage.getItem("kite.output") || "null"));
+  #systemOutput = $state(""); // the name of Windows' default output
+  /** The picked output while it's connected; otherwise null (Windows' default). */
+  sink = $derived(this.output && this.outputs.some((o) => o.id === this.output.id) ? this.output : null);
+  /** Where the music comes out now. Volume and equalizer are remembered per name. */
+  outputName = $derived(this.sink?.label || this.#systemOutput);
+  #onSink = [];
+  #volumes = JSON.parse(localStorage.getItem("kite.outputVolumes") || "{}");
   #xfTimer = null;
   #sleepTick = null;
   #warmToken = 0;
@@ -89,8 +108,12 @@ class Player {
     this.#wireAudio(this.#audio);
     this.#wireAudio(this.#standby);
     this.#wireMediaControls();
-    invoke("audio_device").then((d) => this.#onDevice(d, false)).catch(() => {});
-    listen("audio-device", ({ payload }) => this.#onDevice(payload, true));
+    invoke("audio_device").then((d) => (this.#systemOutput = d?.name || "")).catch(() => {});
+    listen("audio-device", ({ payload }) => (this.#systemOutput = payload?.name || ""));
+    // Device names need a permission Kite gives its own page (see audio_device.rs).
+    if (this.canPickOutput) invoke("allow_device_names").catch(() => {}).finally(() => this.#listOutputs());
+    navigator.mediaDevices?.addEventListener("devicechange", () => this.#listOutputs());
+    const started = Date.now();
 
     $effect.root(() => {
       $effect(() => {
@@ -102,10 +125,33 @@ class Player {
         localStorage.setItem("kite.crossfade", String(this.crossfade));
       });
       $effect(() => {
+        localStorage.setItem("kite.crossfadeSmart", this.crossfadeSmart ? "1" : "0");
+      });
+      // Another output (picked here, or Windows switched): its own volume, and say so.
+      let lastOutput = null;
+      $effect(() => {
+        const name = this.outputName;
+        if (!name) return;
+        untrack(() => {
+          const saved = this.#volumes[name];
+          if (typeof saved === "number") this.volume = saved;
+          if (lastOutput && lastOutput !== name && Date.now() - started > 3000) {
+            toasts.show(`Playing on ${name} · volume ${Math.round(this.volume * 100)}%`);
+          }
+          lastOutput = name;
+        });
+      });
+      // Not tracking the name here: on a switch, the effect above loads first.
+      $effect(() => {
         const v = this.volume;
-        if (!this.#device) return;
-        this.#deviceVolumes[this.#device] = v;
-        localStorage.setItem("kite.deviceVolumes", JSON.stringify(this.#deviceVolumes));
+        const name = untrack(() => this.outputName);
+        if (!name) return;
+        this.#volumes[name] = v;
+        localStorage.setItem("kite.outputVolumes", JSON.stringify(this.#volumes));
+      });
+      $effect(() => {
+        const id = this.sink?.id ?? "";
+        untrack(() => this.#applySink(id));
       });
       $effect(() => this.#save());
     });
@@ -359,13 +405,45 @@ class Player {
     return this.#audio;
   }
 
-  /** The output device changed (or Kite started): use the volume last set on it. */
-  #onDevice(d, announce) {
-    if (!d?.id) return;
-    this.#device = d.id;
-    const saved = this.#deviceVolumes[d.id];
-    if (typeof saved === "number") this.volume = saved;
-    if (announce) toasts.show(`Playing on ${d.name || "another device"} · volume ${Math.round(this.volume * 100)}%`);
+  // ---- output device --------------------------------------------------------
+
+  async #listOutputs() {
+    if (!this.canPickOutput || !navigator.mediaDevices?.enumerateDevices) return;
+    const all = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    // "default" and "communications" are aliases of real devices; unnamed ones can't be told apart.
+    const list = all
+      .filter((d) => d.kind === "audiooutput" && d.label && d.deviceId && d.deviceId !== "default" && d.deviceId !== "communications")
+      // Chromium adds the USB id ("Headphones (Chu2 DSP) (31b2:0113)"); Windows doesn't, and the
+      // names must match for volume and equalizer to follow the device.
+      .map((d) => ({ id: d.deviceId, label: d.label.replace(/ \([0-9a-f]{4}:[0-9a-f]{4}\)$/i, "") }));
+    // Plugged into another port, a device can come back under a new id: find it by name.
+    if (this.output && !list.some((o) => o.id === this.output.id)) {
+      const same = list.find((o) => o.label === this.output.label);
+      if (same) this.setOutput(same);
+    }
+    this.outputs = list;
+  }
+
+  /** Plays on this output from now on (null: whatever Windows uses). */
+  setOutput(o) {
+    this.output = o ? { id: o.id, label: o.label } : null;
+    localStorage.setItem("kite.output", JSON.stringify(this.output));
+  }
+
+  #applySink(id) {
+    for (const a of [this.#audio, this.#standby]) a.setSinkId?.(id).catch((e) => console.warn("output", e));
+    for (const fn of this.#onSink) fn(id);
+  }
+
+  /** The sound engine's own output follows the same device. */
+  onSink(fn) {
+    this.#onSink.push(fn);
+    fn(this.sink?.id ?? "");
+  }
+
+  /** The sound engine tells how loud the end of a song is, for the DJ-style crossfade. */
+  setQuietProbe(fn) {
+    this.#quietProbe = fn;
   }
 
   // ---- hooks for the sound engine ------------------------------------------
@@ -526,13 +604,29 @@ class Player {
     if (p >= 1) this.#endCrossfade();
   }
 
-  /** Whether the current song should fade into the next one now. */
-  #shouldCrossfade(a, left) {
+  /** Near the end: fade into the next song now? At the plain crossfade point, or earlier
+   *  when the ending has gone quiet (DJ style, see quiet.js). */
+  #maybeCrossfade(a, left) {
+    if (!this.#canCrossfade(a)) {
+      this.#quietSince = 0;
+      return;
+    }
+    const q = this.crossfadeSmart && this.#quietProbe ? this.#quietProbe(a) : null;
+    const t = performance.now();
+    if (q && isQuiet(q.now, q.avg)) this.#quietSince ||= t;
+    else this.#quietSince = 0;
+    const quietFor = this.#quietSince ? (t - this.#quietSince) / 1000 : 0;
+    const step = decide({ left, crossfade: this.crossfade, now: q?.now ?? null, avg: q?.avg ?? null, quietFor });
+    if (step === "wait") return;
+    this.#quietSince = 0;
+    this.lastCrossfade = { step, left: Math.round(left * 10) / 10 };
+    this.#crossfadeTo(Math.min(this.crossfade, left));
+  }
+
+  #canCrossfade(a) {
     return (
       this.crossfade > 0 &&
       !this.#xf &&
-      left <= this.crossfade &&
-      left > 0.5 &&
       a.duration > this.crossfade * 2 + 5 &&
       this.repeat !== "one" &&
       !this.sleep?.endOfSong &&
@@ -576,6 +670,7 @@ class Player {
   }
 
   #newSong() {
+    this.#quietSince = 0;
     this.#counted = false;
     this.#announced = false;
     this.#scrobbled = false;
@@ -634,7 +729,7 @@ class Player {
       if (next && Number.isFinite(left) && left < PRELOAD_BEFORE_END && this.#standbyKey !== next.key && !this.#xf) {
         this.#preloadNext();
       }
-      if (Number.isFinite(left) && this.#shouldCrossfade(a, left)) this.#crossfadeTo(Math.min(this.crossfade, left));
+      if (Number.isFinite(left)) this.#maybeCrossfade(a, left);
       // Counts as a play after 30 s, or halfway through shorter songs.
       if (!this.#counted && this.current && a.currentTime >= Math.min(30, (a.duration || 60) / 2)) {
         this.#counted = true;

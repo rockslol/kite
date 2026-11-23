@@ -177,6 +177,7 @@ fn main() {
             hotkeys::hotkeys_apply,
             hotkeys::hotkeys_suspend,
             audio_device::audio_device,
+            audio_device::allow_device_names,
             scrobble::scrobble_status,
             scrobble::scrobble_now_playing,
             scrobble::scrobble,

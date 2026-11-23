@@ -33,6 +33,77 @@ pub fn start(app: &AppHandle) {
     let _ = app;
 }
 
+/// Lets the page see the names of the speakers and headphones, so Settings can offer them.
+/// Chromium only names devices for pages allowed to use the microphone, so Kite's own page
+/// gets that permission. Kite never opens the microphone (and plugins run in workers, which
+/// can't), so nothing is recorded and Windows shows no microphone-in-use icon.
+/// Called by the page once it has loaded (before that the window has no origin yet). Answers
+/// when the permission is in place, so the page can list the devices right after.
+#[tauri::command]
+pub async fn allow_device_names(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let url = window.url().map_err(|e| e.to_string())?;
+        let origin = url.origin().ascii_serialization();
+        // Answered once, from whichever comes first: an error here or WebView2's callback.
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let reply: Reply = std::sync::Arc::new(Mutex::new(Some(tx)));
+        let o = origin.clone();
+        window
+            .with_webview(move |wv| unsafe {
+                use webview2_com::Microsoft::Web::WebView2::Win32::{
+                    ICoreWebView2Profile4, ICoreWebView2_13, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+                    COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+                };
+                use windows::core::{Interface, HSTRING};
+                let profile = wv
+                    .controller()
+                    .CoreWebView2()
+                    .and_then(|c| c.cast::<ICoreWebView2_13>())
+                    .and_then(|c| c.Profile())
+                    .and_then(|p| p.cast::<ICoreWebView2Profile4>());
+                let profile = match profile {
+                    Ok(p) => p,
+                    Err(e) => return answer(&reply, Err(format!("this WebView2 can't do it: {e}"))),
+                };
+                let on_done = reply.clone();
+                let done = webview2_com::SetPermissionStateCompletedHandler::create(Box::new(move |r| {
+                    answer(&on_done, r.map_err(|e| e.to_string()));
+                    Ok(())
+                }));
+                if let Err(e) = profile.SetPermissionState(
+                    COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+                    &HSTRING::from(o.as_str()),
+                    COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+                    &done,
+                ) {
+                    answer(&reply, Err(e.to_string()));
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        let r = rx.await.unwrap_or_else(|_| Err("no answer".into()));
+        if let Err(e) = &r {
+            crate::klog!("couldn't get device names for {origin}: {e}");
+        }
+        r
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+type Reply = std::sync::Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
+
+#[cfg(windows)]
+fn answer(reply: &Reply, r: Result<(), String>) {
+    if let Some(tx) = reply.lock().unwrap().take() {
+        let _ = tx.send(r);
+    }
+}
+
 fn changed(app: &AppHandle, device: Option<Device>) {
     let current = app.state::<Current>();
     let mut cur = current.0.lock().unwrap();
