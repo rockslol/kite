@@ -2,6 +2,12 @@
 
 What changed in each version of Kite. The newest version is at the top.
 
+## 0.4.1 (2026-11-23)
+
+### Fixes
+
+- **Switching Data saver while a song played could stop that song** partway with "This song couldn't be played", and Kite skipped to the next one. A song now keeps the quality it started with, and the setting applies from the next song.
+
 ## 0.4.0 (2026-11-23)
 
 ### Sound

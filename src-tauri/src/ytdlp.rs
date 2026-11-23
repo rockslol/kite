@@ -193,6 +193,15 @@ impl YtDlp {
     }
 
     /// Makes sure yt-dlp is installed and recent. Runs once at startup in the background.
+    /// Tests only: yt-dlp from an existing folder, ready without an app around it.
+    #[cfg(test)]
+    pub async fn ready_for_tests(bin_dir: &Path, cache_dir: &Path) -> Self {
+        let y = Self::new(bin_dir, cache_dir);
+        y.pick_js_runtime(&reqwest::Client::new()).await;
+        y.status.send_replace(ToolStatus::Ready);
+        y
+    }
+
     pub async fn ensure(&self, app: AppHandle, http: reqwest::Client) {
         let fresh_install = !self.bin.exists();
         if fresh_install {

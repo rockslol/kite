@@ -47,6 +47,9 @@ struct Entry {
 /// a restart too (until the link expires).
 #[derive(Serialize, Deserialize, Clone)]
 struct SavedLink {
+    /// Found with Data saver on or off. Links saved before 0.4.1 don't say, and aren't used.
+    #[serde(default)]
+    saver: Option<bool>,
     url: String,
     headers: Vec<(String, String)>,
     ext: String,
@@ -73,6 +76,15 @@ fn fresh_until(url: &str) -> (u64, bool) {
 
 type Slot = Arc<OnceCell<Result<Arc<Entry>, String>>>;
 
+/// Each song can have a link per quality: `slot_key(page, data_saver)`.
+fn slot_key(page_url: &str, saver: bool) -> String {
+    if saver {
+        format!("saver {page_url}")
+    } else {
+        page_url.to_string()
+    }
+}
+
 pub struct Streams {
     yt: Arc<YtDlp>,
     http: reqwest::Client,
@@ -82,8 +94,11 @@ pub struct Streams {
     resolving: tokio::sync::Semaphore,
     links_file: PathBuf,
     saved: Mutex<HashMap<String, SavedLink>>,
-    /// Settings → Audio quality → Data saver.
+    /// Settings → Streaming → Data saver.
     saver: std::sync::atomic::AtomicBool,
+    /// The quality each song started streaming at. A song keeps it to the end, even if Data
+    /// saver is switched meanwhile: the rest of it must come from the same file.
+    serving: Mutex<HashMap<String, bool>>,
 }
 
 impl Streams {
@@ -96,7 +111,7 @@ impl Streams {
             .and_then(|b| serde_json::from_slice::<HashMap<String, SavedLink>>(&b).ok())
             .unwrap_or_default()
             .into_iter()
-            .filter(|(_, l)| l.fresh_until > soon)
+            .filter(|(_, l)| l.fresh_until > soon && l.saver.is_some())
             .collect();
         let slots = saved
             .iter()
@@ -123,6 +138,7 @@ impl Streams {
             links_file,
             saved: Mutex::new(saved),
             saver: Default::default(),
+            serving: Mutex::new(HashMap::new()),
         }
     }
 
@@ -139,14 +155,22 @@ impl Streams {
         }
     }
 
-    /// Resolves a track page URL to something playable. Concurrent callers share one lookup.
+    /// Resolves a track page URL to something playable, at the current quality. Concurrent
+    /// callers share one lookup.
     pub async fn prepare(&self, page_url: &str) -> Result<(), String> {
-        self.entry(page_url).await.map(|_| ())
+        self.entry(page_url, self.saver.load(std::sync::atomic::Ordering::Relaxed)).await.map(|_| ())
     }
 
-    async fn entry(&self, page_url: &str) -> Result<Arc<Entry>, String> {
+    async fn entry(&self, page_url: &str, saver: bool) -> Result<Arc<Entry>, String> {
+        let key = slot_key(page_url, saver);
         let slot = {
             let mut slots = self.slots.lock().unwrap();
+            // A downloaded (HLS) song plays from its file, whichever quality it was saved at.
+            if let Some(Ok(e)) = slots.get(&slot_key(page_url, !saver)).and_then(|s| s.get()) {
+                if matches!(&e.source, Source::File { path, .. } if path.exists()) {
+                    return Ok(e.clone());
+                }
+            }
             let fresh = |s: &Slot| match s.get() {
                 // Cached files stay valid until the file is gone (Settings → Clear cache).
                 Some(Ok(e)) => match &e.source {
@@ -156,16 +180,29 @@ impl Streams {
                 Some(Err(_)) => false,
                 None => true,
             };
-            match slots.get(page_url) {
+            match slots.get(&key) {
                 Some(s) if fresh(s) => s.clone(),
                 _ => {
                     let s: Slot = Arc::new(OnceCell::new());
-                    slots.insert(page_url.to_string(), s.clone());
+                    slots.insert(key, s.clone());
                     s
                 }
             }
         };
-        slot.get_or_init(|| self.load(page_url)).await.clone()
+        slot.get_or_init(|| self.load(page_url, saver)).await.clone()
+    }
+
+    /// The quality to serve a request at. A media element starts every stream with a request
+    /// from byte 0: that one takes the current setting, and the rest of the song follows it.
+    fn quality_for(&self, page_url: &str, start: u64) -> bool {
+        let now = self.saver.load(std::sync::atomic::Ordering::Relaxed);
+        let mut serving = self.serving.lock().unwrap();
+        if start == 0 {
+            serving.insert(page_url.to_string(), now);
+            now
+        } else {
+            serving.get(page_url).copied().unwrap_or(now)
+        }
     }
 
     /// Debug builds only, for testing: make every cached stream link invalid, as if it had
@@ -193,15 +230,11 @@ impl Streams {
         n
     }
 
-    /// Switches between best quality and data saver. Links resolved for the other quality are
-    /// dropped, so the next songs load at the new one (downloaded HLS songs stay).
+    /// Switches between best quality and data saver. Songs started from now on use the new
+    /// one; a song already playing keeps its own to the end. Links found at either quality are
+    /// kept, so switching back is instant.
     pub fn set_saver(&self, on: bool) {
-        use std::sync::atomic::Ordering;
-        if self.saver.swap(on, Ordering::Relaxed) == on {
-            return;
-        }
-        self.slots.lock().unwrap().retain(|_, s| matches!(s.get(), Some(Ok(e)) if matches!(e.source, Source::File { .. })));
-        self.save_links(|s| s.clear());
+        self.saver.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// How many resolved links are saved for later runs.
@@ -209,27 +242,28 @@ impl Streams {
         self.saved.lock().unwrap().len()
     }
 
-    fn forget(&self, page_url: &str) {
-        self.slots.lock().unwrap().remove(page_url);
-        if self.saved.lock().unwrap().contains_key(page_url) {
+    fn forget(&self, page_url: &str, saver: bool) {
+        let key = slot_key(page_url, saver);
+        self.slots.lock().unwrap().remove(&key);
+        if self.saved.lock().unwrap().contains_key(&key) {
             self.save_links(|s| {
-                s.remove(page_url);
+                s.remove(&key);
             });
         }
     }
 
-    async fn load(&self, page_url: &str) -> Result<Arc<Entry>, String> {
+    async fn load(&self, page_url: &str, saver: bool) -> Result<Arc<Entry>, String> {
         let mut tries = 0;
         loop {
             tries += 1;
-            let (entry, link) = self.resolve_once(page_url).await?;
+            let (entry, link) = self.resolve_once(page_url, saver).await?;
             let Source::Remote { url, headers, mime, available_at, give_up } = &entry.source else { return Ok(entry) };
             // Check the link with a 1-byte read, so a song that was prepared ahead really starts
             // right away, and a link that never works is replaced before anyone presses play.
             if self.proxy(url, headers, mime, *available_at, *give_up, Some((0, Some(0)))).await.is_ok() {
                 if let Some(link) = link {
                     self.save_links(|s| {
-                        s.insert(page_url.to_string(), link);
+                        s.insert(slot_key(page_url, saver), link);
                     });
                 }
                 return Ok(entry);
@@ -244,11 +278,11 @@ impl Streams {
 
     /// One yt-dlp lookup. Returns the entry, and the link to save for later runs if it says
     /// when it expires.
-    async fn resolve_once(&self, page_url: &str) -> Result<(Arc<Entry>, Option<SavedLink>), String> {
+    async fn resolve_once(&self, page_url: &str, saver: bool) -> Result<(Arc<Entry>, Option<SavedLink>), String> {
         let started = Instant::now();
         let r = {
             let _permit = self.resolving.acquire().await.map_err(|e| e.to_string())?;
-            self.yt.resolve(page_url, self.saver.load(std::sync::atomic::Ordering::Relaxed)).await.map_err(|e| {
+            self.yt.resolve(page_url, saver).await.map_err(|e| {
                 crate::klog!("couldn't find a stream for {page_url}: {e}");
                 e
             })?
@@ -256,13 +290,14 @@ impl Streams {
         crate::klog!("resolved {page_url} in {:.1} s ({})", started.elapsed().as_secs_f32(), r.ext);
         if r.hls {
             tokio::fs::create_dir_all(&self.cache_dir).await.map_err(|e| e.to_string())?;
-            let stem = self.cache_dir.join(cache_key(page_url));
+            let stem = self.cache_dir.join(cache_key(&slot_key(page_url, saver)));
             let path = self.yt.download(page_url, &stem).await?;
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
             return Ok((Arc::new(Entry { source: Source::File { path, mime: mime_for(&ext) }, fresh_until: u64::MAX }), None));
         }
         let (fresh, stated) = fresh_until(&r.url);
         let link = stated.then(|| SavedLink {
+            saver: Some(saver),
             url: r.url.clone(),
             headers: r.headers.clone(),
             ext: r.ext.clone(),
@@ -308,8 +343,9 @@ impl Streams {
             .and_then(|v| v.to_str().ok())
             .and_then(parse_range);
 
+        let saver = self.quality_for(&page_url, range.map_or(0, |r| r.0));
         for attempt in 0..2 {
-            let entry = match self.entry(&page_url).await {
+            let entry = match self.entry(&page_url, saver).await {
                 Ok(e) => e,
                 Err(e) => return text(StatusCode::BAD_GATEWAY, &e),
             };
@@ -322,7 +358,7 @@ impl Streams {
             match result {
                 Ok(resp) => return resp,
                 // The stream URL expired or was refused: resolve once more and retry.
-                Err(_) if attempt == 0 => self.forget(&page_url),
+                Err(_) if attempt == 0 => self.forget(&page_url, saver),
                 Err(e) => return text(StatusCode::BAD_GATEWAY, &e),
             }
         }
@@ -501,7 +537,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let new = || Streams::new(Arc::new(YtDlp::new(&dir.join("bin"), &dir)), reqwest::Client::new(), dir.clone());
-        let link = |until| SavedLink { url: "https://x/v?expire=1".into(), headers: vec![], ext: "webm".into(), available_at: None, fresh_until: until };
+        let link = |until| SavedLink { saver: Some(false), url: "https://x/v?expire=1".into(), headers: vec![], ext: "webm".into(), available_at: None, fresh_until: until };
         let s = new();
         s.save_links(|m| {
             m.insert("https://www.youtube.com/watch?v=live".into(), link(unix_now() + 3600));
@@ -512,8 +548,78 @@ mod tests {
         assert!(slots.contains_key("https://www.youtube.com/watch?v=live"));
         assert!(!slots.contains_key("https://www.youtube.com/watch?v=old"), "less than a minute left: resolve again");
         drop(slots);
-        s2.forget("https://www.youtube.com/watch?v=live");
+        s2.forget("https://www.youtube.com/watch?v=live", false);
         assert!(new().slots.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Switching Data saver while a song plays must not move the rest of that song to another
+    /// file: the bytes wouldn't line up and the song would fail partway. Needs the internet and
+    /// the yt-dlp Kite downloaded: `cargo test -- --ignored saver_switch`.
+    #[test]
+    #[ignore]
+    fn saver_switch_keeps_a_playing_song_on_its_file() {
+        tauri::async_runtime::block_on(saver_switch());
+    }
+
+    async fn saver_switch() {
+        let app_dir = PathBuf::from(std::env::var("APPDATA").unwrap()).join("app.kite.player");
+        let dir = std::env::temp_dir().join(format!("kite-saver-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let yt = Arc::new(YtDlp::ready_for_tests(&app_dir.join("bin"), &dir).await);
+        let s = Streams::new(yt, reqwest::Client::new(), dir.clone());
+        let page = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        let get = |start: u64| {
+            Request::builder()
+                .uri(format!("http://kite.localhost/play?u={}", percent_encoding::utf8_percent_encode(page, percent_encoding::NON_ALPHANUMERIC)))
+                .header(header::RANGE, format!("bytes={start}-"))
+                .body(Vec::new())
+                .unwrap()
+        };
+        // The file's size, from "bytes 0-2097151/3433041".
+        let size = |r: &Response<Vec<u8>>| {
+            assert!(r.status().is_success(), "{}: {}", r.status(), String::from_utf8_lossy(r.body()));
+            let cr = r.headers()[header::CONTENT_RANGE].to_str().unwrap().to_string();
+            cr.rsplit('/').next().unwrap().parse::<u64>().unwrap()
+        };
+        s.prepare(page).await.unwrap();
+        let best = size(&s.handle(get(0)).await);
+        s.set_saver(true);
+        // The playing song asks for its next piece: still the same file.
+        assert_eq!(size(&s.handle(get(CHUNK)).await), best, "the playing song moved to another file");
+        // Played again from the start, it uses the smaller stream.
+        s.prepare(page).await.unwrap();
+        let small = size(&s.handle(get(0)).await);
+        assert!(small < best, "data saver should give a smaller file ({small} vs {best})");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A song keeps the quality it started at; the next song started takes the new setting.
+    #[test]
+    fn a_song_keeps_the_quality_it_started_at() {
+        let dir = std::env::temp_dir().join(format!("kite-quality-test-{}", std::process::id()));
+        let s = Streams::new(Arc::new(YtDlp::new(&dir.join("bin"), &dir)), reqwest::Client::new(), dir.clone());
+        assert!(!s.quality_for("a", 0));
+        s.set_saver(true);
+        assert!(!s.quality_for("a", CHUNK), "song a started at best quality");
+        assert!(s.quality_for("b", 0), "song b starts after the switch");
+        assert!(s.quality_for("a", 0), "song a played again from the start");
+        assert!(s.quality_for("c", CHUNK), "unknown song: the current setting");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Links saved before 0.4.1 don't say their quality, so they're resolved again.
+    #[test]
+    fn links_without_a_quality_are_not_used() {
+        let dir = std::env::temp_dir().join(format!("kite-oldlinks-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let until = unix_now() + 3600;
+        let link = |saver: &str| format!(r#"{{{saver}"url":"u","headers":[],"ext":"webm","available_at":null,"fresh_until":{until}}}"#);
+        std::fs::write(dir.join("links.json"), format!(r#"{{"old":{},"saver new":{}}}"#, link(""), link(r#""saver":true,"#))).unwrap();
+        let s = Streams::new(Arc::new(YtDlp::new(&dir.join("bin"), &dir)), reqwest::Client::new(), dir.clone());
+        let slots = s.slots.lock().unwrap();
+        assert!(!slots.contains_key("old") && slots.contains_key("saver new"));
+        drop(slots);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
