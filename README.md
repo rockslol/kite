@@ -34,7 +34,8 @@ No account. No ads. No tracking or telemetry.
 - **Playlist import**: Bring public playlists, albums, and songs from Spotify, Deezer, YouTube Music, YouTube, and SoundCloud. Spotify and Deezer songs are matched to the same song on YouTube Music, avoiding live, cover, and sped-up versions. **Sync** adds songs that are new at the source.
 - **Pick another version**: If a match is wrong, right-click it and choose another. Kite remembers your choice for the next import.
 - **Library**: Liked songs, playlists you can rename and reorder by dragging, Recently played, and Most played.
-- **Queue**: Play next, add to queue, drag to reorder, shuffle, and repeat. Your queue and position are still there after a restart.
+- **Discover**: Artist and album pages, endless radio from any song, a Home page with mixes, new releases and the charts of 70 countries, and follow artists to hear about their new music.
+- **Queue**: Play next, add to queue (with Undo), drag to reorder, shuffle, repeat, remove duplicates, and see how long it still plays. Songs you played stay above the current one, and your queue is still there after a restart.
 - **Synced lyrics**: Line-by-line lyrics from [LRCLIB](https://lrclib.net) or a `.lrc` file next to a local song, with the current line kept in view. Click a line to jump there, and nudge the timing if it's early or late.
 - **Sound**: One-click effects (Slowed + reverb, Nightcore, 8D…), speed and pitch, reverb, a 10-band equalizer, balance and mono, a sleep timer, crossfade that can wait for a song's quiet ending, and even-out volume. Pick which speakers or headphones Kite plays on; each keeps its own volume and equalizer.
 - **Sharing**: Show what you're playing as your Discord status, and scrobble to Last.fm or ListenBrainz with your own account. All off until you switch them on.

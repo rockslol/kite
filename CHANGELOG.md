@@ -2,7 +2,16 @@
 
 What changed in each version of Kite. The newest version is at the top.
 
-## 0.5.0 (not released yet)
+## 0.5.1 (2026-11-23)
+
+### Queue
+
+- **How long the queue still plays**, at the top of the queue: "23 songs · 1 h 12 min left".
+- **Remove duplicates** in the queue: takes out songs that are already playing or already up next. Undo puts them back where they were.
+- **Played**: the songs you played before the current one stay in the queue, above it. Double-click one to play it again. The last three show, the rest behind "Show all".
+- **Undo after Play next and Add to queue**: a short message says what was added, with Undo.
+
+## 0.5.0 (2026-11-23)
 
 ### Discover
 
